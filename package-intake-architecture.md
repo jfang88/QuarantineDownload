@@ -76,6 +76,7 @@ flowchart TB
 ## Sequence diagram
 
 ```mermaid
+
 sequenceDiagram
     autonumber
     participant Team as Team
