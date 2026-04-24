@@ -116,6 +116,7 @@ sequenceDiagram
     Monitor11b-->>Gov: Flag any hits — create GitLab recall issue tagged recall::binary-recheck
     Monitor11b-->>Team: Notify named owners of flagged artifacts
     Gov-->>Repo: Block compromised artifact on confirmed hit (403 all requests)
+
 ```
 
 ---
