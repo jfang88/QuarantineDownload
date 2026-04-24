@@ -79,17 +79,17 @@ flowchart TB
 
 sequenceDiagram
     autonumber
-    participant Team as Team
-    participant Portal as Request Portal (GitLab CE)
-    participant Gov as Governance / Approval
-    participant Proxy as Restricted Proxy (Squid)
-    participant Intake as Quarantine Repo (Nexus Pro)
-    participant Scan as Analysis Pipeline
-    participant Delay as Delay Policy Gate
-    participant Test as Test Pipeline
-    participant Repo as Final Approved Repo (Nexus Pro)
-    participant Monitor11a as CVE Monitor (Dependency-Track)
-    participant Monitor11b as Binary Recheck (scheduled job)
+    participant Team as "Team"
+    participant Portal as "Request Portal (GitLab CE)"
+    participant Gov as "Governance / Approval"
+    participant Proxy as "Restricted Proxy (Squid)"
+    participant Intake as "Quarantine Repo (Nexus Pro)"
+    participant Scan as "Analysis Pipeline"
+    participant Delay as "Delay Policy Gate"
+    participant Test as "Test Pipeline"
+    participant Repo as "Final Approved Repo (Nexus Pro)"
+    participant Monitor11a as "CVE Monitor (Dependency-Track)"
+    participant Monitor11b as "Binary Recheck (scheduled job)"
 
     Team->>Portal: Submit request — name, version, artifact type, owner, justification, environment
     Portal->>Gov: Evaluate policy, risk tier, artifact type path
