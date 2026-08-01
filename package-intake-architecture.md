@@ -32,7 +32,7 @@ The architecture enforces a single controlled intake path for all artifact types
 
 **Three analysis paths exist within this architecture.** Open-source packages and container images support full SBOM generation and continuous CVE re-evaluation via Dependency-Track. Proprietary closed-source binaries — including Microsoft patches, third-party commercial software, firmware, and hardware drivers — cannot yield meaningful SBOMs and follow a vendor-advisory intake path instead. AI/ML model artifacts — model weights, adapters, and tokenizer bundles pulled from model hubs — are neither source-available packages nor vendor-supported binaries, and follow a third intake path built around serialization-format safety and hub revision pinning rather than SBOM or code signing. All three paths use the same request portal, quarantine repository, approval gate, and approved repository.
 
-**A fourth concern — post-approval supply chain compromise — requires controls that none of the three paths above fully addresses.** SBOM-based tools such as Dependency-Track detect known CVEs in component versions, but they cannot detect a trojanised binary where the version string is correct and no CVE has been published. A backdoored Notepad++ 8.6.4 or a compromised Trivy binary will show as clean in Dependency-Track because the component name and version match a legitimate release. The same is true for any binary that was clean at intake and later identified as part of a supply chain attack campaign, and for a model checkpoint that was clean when pinned but whose upstream revision was quietly repointed. Stage 11b in this architecture addresses this gap through retroactive hash rechecks, updated YARA scans, and binary authentication controls applied periodically against the entire approved artifact inventory.
+**A fourth concern — post-approval supply chain compromise — requires controls that none of the three paths above fully addresses.** SBOM-based tools such as Dependency-Track detect known CVEs in component versions, but they cannot detect a trojanised binary where the version string is correct and no CVE has been published. A backdoored Notepad++ 8.6.4 or a compromised Trivy binary will show as clean in Dependency-Track because the component name and version match a legitimate release. The same is true for any binary that was clean at intake and later identified as part of a supply chain attack campaign, and for a model checkpoint that was clean when pinned but whose mutable upstream reference (a branch or tag, not the pinned commit itself) has since drifted to point at different, unreviewed content. Stage 11b in this architecture addresses this gap through retroactive hash rechecks, updated YARA scans, and binary authentication controls applied periodically against the entire approved artifact inventory.
 
 **A fifth concern — the integrity of the pipeline itself — is addressed by a dedicated trust-root control set.** Every control described above depends on tools (Syft, Grype, YARA, CAPE, NSRL client libraries, model-format scanners) that are themselves internet-sourced software with their own supply chain. A compromise of the scanning tooling could produce false "clean" verdicts across the entire inventory without tripping any control described elsewhere in this document. See "Pipeline tooling supply chain" below.
 
@@ -55,9 +55,9 @@ flowchart TB
 
     V1 --> V2[Stage 5a · SBOM and SCA\nSyft SBOM generation\nGrype SCA, license scan, secrets scan\nUpload SBOM to Dependency-Track]
     V1B --> V2B[Stage 5b · Vendor Advisory Capture\nRecord KB number, CVEs addressed, vendor severity\nStore in Nexus metadata and CMDB\nNo SBOM — do not create empty DT entry]
-    V1C --> V2C[Stage 5c · Model Safety and Disclosure Capture\nPickle/unsafe-format static scan\nModel card, license, and dataset provenance capture\nNo SBOM — do not create empty DT entry]
+    V1C --> V2C[Stage 5c · Model Safety, Disclosure, and ML-BOM Capture\nPickle/unsafe-format static scan\nCycloneDX ML-BOM, model card, license, dataset provenance\nNot represented in Dependency-Track — no meaningful CVE mapping]
 
-    V2 --> V3[Stage 6 · Malware and Sandbox Analysis\nClamAV and YARA — all artifact types\nNSRL and MalwareBazaar hash lookup\nOpen source: VirusTotal hash lookup if policy permits\nProprietary: private CAPE sandbox only\nModel: isolated load-test in no-egress sandbox]
+    V2 --> V3[Stage 6 · Malware and Sandbox Analysis\nClamAV and YARA — all artifact types\nNSRL and MalwareBazaar hash lookup\nOpen source: VirusTotal hash lookup if policy permits\nProprietary: per-platform analysis profile — CAPE, Linux VM, or firmware analysis\nModel: isolated load-test in no-egress sandbox]
     V2B --> V3
     V2C --> V3
 
@@ -111,7 +111,7 @@ sequenceDiagram
     Proxy->>Intake: Download from allowlisted source only, write intake metadata tags
     Note over Intake,Scan: Path diverges by artifact type
     Intake->>Scan: Open source — checksum, dep-confusion, Authenticode/codesign/GPG, SBOM, SCA, license, malware
-    Intake->>Scan: Proprietary — vendor hash, platform signature thumbprint, NSRL lookup, advisory capture, ClamAV, YARA, private CAPE
+    Intake->>Scan: Proprietary — vendor hash, platform signature thumbprint, NSRL lookup, advisory capture, ClamAV, YARA, profile-appropriate private dynamic analysis
     Intake->>Scan: Model — hub revision pin, serialization format check, pickle/unsafe-format scan, model card capture, isolated load-test
     Scan-->>Intake: Attach metadata, verdicts, SBOM/advisory/model-card record, sandbox report to Nexus artifact
     Intake->>Delay: Enforce cooling-off window by risk tier
@@ -128,7 +128,7 @@ sequenceDiagram
     Monitor11b->>Monitor11b: Re-scan stored binaries with updated YARA rulesets
     Monitor11b->>Monitor11b: Recheck NSRL for positive-assertion validation
     Monitor11b->>Monitor11b: Recheck Authenticode/codesign/GPG signatures by platform
-    Monitor11b->>Monitor11b: Recheck pinned model hub revision for silent repoint
+    Monitor11b->>Monitor11b: Recheck mutable-source-reference drift for model hub revisions
     Monitor11b->>Monitor11b: Suppress hits already dispositioned as confirmed false positive
     Monitor11b-->>Gov: Flag unsuppressed hits — create GitLab recall issue tagged recall::binary-recheck
     Monitor11b-->>Team: Notify named owners of flagged artifacts
@@ -147,8 +147,8 @@ sequenceDiagram
 - Prevent dependency-confusion and namespace-spoofing attacks at the proxy and quarantine layers (open-source path).
 - Apply distinct analysis paths based on artifact type: SBOM-based analysis for open-source and container artifacts; vendor-advisory capture for proprietary closed-source binaries; serialization-safety and provenance capture for AI/ML model artifacts.
 - Generate SBOM and SCA data for open-source and container artifacts; maintain vendor advisory records for proprietary artifacts; maintain model card, license, and hub-provenance records for model artifacts.
-- Detect malware and suspicious behavior at intake using ClamAV, YARA, MalwareBazaar hash lookup, NSRL lookup, and private sandbox detonation. Use private sandboxing exclusively for all proprietary artifacts. For model artifacts, detonation means loading the model inside a no-egress, syscall-monitored sandbox to catch pickle-triggered code execution or unexpected network calls, not Windows guest sandboxing.
-- Detect post-approval supply chain compromise through a scheduled retroactive recheck job (Stage 11b) that re-queries threat intelligence sources against every stored artifact hash, re-scans with updated YARA rules, rechecks binary authentication across platforms, and rechecks pinned model hub revisions for silent repoint. This controls the threat class that SBOM-based tools cannot see: trojanised binaries or repointed model weights where the version string is correct and no CVE has been published. Recheck queries against rate-limited external services are budgeted and prioritised by risk tier so coverage degrades predictably rather than silently as inventory grows; dispositioned false positives are suppressed from re-alerting until the artifact or ruleset changes.
+- Detect malware and suspicious behavior at intake using ClamAV, YARA, MalwareBazaar hash lookup, NSRL lookup, and private dynamic analysis. Select the dynamic analysis method by artifact platform and format (see the Stage 6 analysis profiles table) rather than assuming one sandbox technology fits every proprietary artifact — CAPE for Windows binaries, a disposable syscall-monitored Linux VM for Linux binaries, firmware extraction/emulation for firmware, and a no-egress syscall-monitored load harness for model artifacts, all kept private with no external file submission.
+- Detect post-approval supply chain compromise through a scheduled retroactive recheck job (Stage 11b) that re-queries threat intelligence sources against every stored artifact hash, re-scans with updated YARA rules, rechecks binary authentication across platforms, and rechecks model hub mutable-source-references for drift against the pinned commit SHA. This controls the threat class that SBOM-based tools cannot see: trojanised binaries, or models resolved through a drifted mutable reference, where the version string is correct and no CVE has been published. Recheck queries against rate-limited external services are budgeted and prioritised by risk tier so coverage degrades predictably rather than silently as inventory grows; dispositioned false positives are suppressed from re-alerting until the artifact or ruleset changes.
 - Protect the pipeline's own integrity: the scanning and verification tooling (Syft, Grype, YARA, CAPE, model-format scanners, hash-lookup clients) is itself internet-sourced software and is pinned, provenance-checked, and periodically self-audited so a compromise of the tooling cannot silently produce false "clean" verdicts.
 - Enforce segregation of duties not only on artifact approval but on administrative access to the pipeline itself — Nexus tag editing, CMDB thumbprint/key registers, YARA ruleset sources, and recheck-job configuration require change control separate from the requestor/approver role.
 - Delay risky new releases to reduce exposure to zero-day and short-lived malicious packages.
@@ -175,9 +175,9 @@ Controls applied in sequence: dependency-confusion check at proxy and quarantine
 
 Applies to: Microsoft patches (.msu, .exe, .cab), Windows Update packages, Adobe installers, Oracle database software, SAP components, hardware drivers, firmware updates, commercial ISV software, and any binary where the vendor does not publish source or a machine-readable SBOM.
 
-Syft and similar tools cannot produce meaningful SBOM data from a closed-source binary. An empty SBOM uploaded to Dependency-Track creates false coverage and is worse than no record. This path replaces SBOM generation with vendor advisory capture.
+Syft and similar source/package-manifest-driven tools cannot *generate* meaningful SBOM data from a closed-source binary — but "closed-source" does not always mean "zero available component data." Some vendors publish their own SBOM (a growing practice under regulatory and procurement pressure); some installers embed extractable package metadata (.NET assembly manifests, some installer formats' embedded file lists); and even where neither exists, a partial component inventory is sometimes technically derivable from the binary itself (e.g., detecting statically linked open-source libraries via binary composition analysis). The distinction that matters is **completeness and evidence quality, not open- versus closed-source status**: accept and verify a vendor-provided SBOM where one exists; generate a partial inventory where technically feasible and label it as partial; and fall back to vendor advisory capture, which remains the primary control for this path regardless. An empty or fabricated-complete SBOM uploaded to Dependency-Track creates false coverage and is worse than no record — that principle holds whether the emptiness comes from "no SBOM tooling applies" or from silently dropping a partial result down to nothing.
 
-Controls applied in sequence: vendor-published hash verification — mismatch is a hard block; Authenticode signature validity check; Authenticode certificate thumbprint verification against the expected publisher cert stored in the CMDB; NSRL positive-assertion lookup; vendor advisory record capture (KB number, CVEs addressed, vendor severity, affected product versions); ClamAV static scan; YARA pattern matching; MalwareBazaar hash lookup; mandatory private CAPE sandbox detonation regardless of hash match; cooling-off delay; isolated test pipeline; promotion sign-off; CMDB entry created as the ongoing deployment and monitoring record. Dependency-Track is not used for this path.
+Controls applied in sequence: vendor-published hash verification — mismatch is a hard block; Authenticode signature validity check; Authenticode certificate thumbprint verification against the expected publisher cert stored in the CMDB; NSRL positive-assertion lookup; vendor advisory record capture (KB number, CVEs addressed, vendor severity, affected product versions); ClamAV static scan; YARA pattern matching; MalwareBazaar hash lookup; mandatory profile-appropriate dynamic analysis regardless of hash match (see the analysis profiles table under Stage 6 — Windows binaries go to CAPE, Linux binaries to a disposable syscall-monitored VM, firmware to extraction/emulation analysis); cooling-off delay; isolated test pipeline; promotion sign-off; CMDB entry created as the ongoing deployment and monitoring record. Dependency-Track is not used for this path.
 
 ### Path C — AI/ML model artifacts
 
@@ -187,7 +187,7 @@ Model artifacts fit neither Path A nor Path B. They are rarely accompanied by pu
 
 **Format policy is the primary control for this path.** `safetensors` (Hugging Face, Apache 2.0) stores only tensor data with no executable payload and is the required format for all new model intake. GGUF (llama.cpp ecosystem) is accepted on the same basis — it is a flat tensor-and-metadata container with no code execution surface. Legacy pickle-based checkpoints (`.pt`, `.pth`, `.bin`, `.ckpt`) are accepted only under a signed exception, and only after passing a static pickle opcode scan that rejects any checkpoint referencing `__reduce__`, `eval`, `exec`, `os.system`, `subprocess`, or other code-execution opcodes rather than plain tensor-construction calls.
 
-Controls applied in sequence: capture the exact hub revision (commit SHA, not a mutable branch or tag) requested and pin the fetch to that revision; verify the download's SHA-256 against the hub's own recorded file hash where the hub publishes one (Hugging Face does, via its LFS/OID metadata); verify the format is `safetensors` or GGUF, or route to the pickle static-scan exception path; run the static opcode/pickle scan on any non-`safetensors` file regardless of extension, since a malicious payload can be disguised with any file extension; capture model card, license, and dataset-provenance metadata (base model lineage, fine-tune source, declared training data, license class — including non-commercial and research-only variants); capture the publisher/organisation identity as verified by the hub (verified-org badge, or absence of one, recorded as a risk signal); ClamAV static scan; YARA pattern matching tuned for embedded-script indicators inside archive-based formats; MalwareBazaar hash lookup; mandatory isolated load-test — the model is loaded inside a no-egress, syscall-monitored sandbox and the pipeline confirms it did not spawn a child process, write outside its working directory, or attempt an outbound connection during load; cooling-off delay; isolated test pipeline for the consuming application; promotion sign-off; CMDB entry created recording the pinned hub revision as the ongoing drift-detection baseline. Dependency-Track is not used for this path.
+Controls applied in sequence: capture the exact hub revision (commit SHA, not a mutable branch or tag) requested and pin the fetch to that revision; verify the download's SHA-256 against the hub's own recorded file hash where the hub publishes one (Hugging Face does, via its LFS/OID metadata); verify the format is `safetensors` or GGUF, or route to the pickle static-scan exception path; run the static opcode/pickle scan on any non-`safetensors` file regardless of extension, since a malicious payload can be disguised with any file extension; capture model card, license, and dataset-provenance metadata (base model lineage, fine-tune source, declared training data, license class — including non-commercial and research-only variants); capture the publisher/organisation identity as verified by the hub (verified-org badge, or absence of one, recorded as a risk signal); ClamAV static scan; YARA pattern matching tuned for embedded-script indicators inside archive-based formats; MalwareBazaar hash lookup; mandatory isolated load-test — the model is loaded inside a no-egress, syscall-monitored sandbox with hard resource limits (maximum total bytes, maximum declared tensor dimensions, maximum RAM/CPU/GPU allocation and time, maximum temporary disk use, and maximum archive depth/compression ratio for any nested-archive formats), since a malicious or malformed model file can be a resource-exhaustion vector — a decompression bomb or an absurd declared tensor shape — independent of whether it also triggers code execution; the pipeline confirms the load did not spawn a child process, write outside its working directory, attempt an outbound connection, or exceed any resource limit during load; cooling-off delay; isolated test pipeline for the consuming application; promotion sign-off; CMDB entry created recording the pinned hub revision as the ongoing drift-detection baseline. Dependency-Track is not used for this path.
 
 ---
 
@@ -242,42 +242,57 @@ The pipeline extracts the actual Team ID and compares it against the expected va
 
 ### Linux package and binary signing
 
-Linux proprietary artifacts (RPM, DEB, or standalone ELF binaries and installers) do not have a single OS-native signing mechanism equivalent to Authenticode. This architecture requires GPG signature verification against a per-publisher key stored in the CMDB key register, with RPM/DEB-native verification used where the artifact is packaged that way.
+Linux proprietary artifacts (RPM, DEB, or standalone ELF binaries and installers) do not have a single OS-native signing mechanism equivalent to Authenticode, and the verification mechanism that actually matters depends on *how the artifact was obtained* — this architecture requires per-source verification rather than treating one tool as universal:
+
+- **RPM packages:** the package's own embedded signature, verified with `rpm --checksig` against an imported publisher public key. This is genuinely RPM-native and reliable.
+- **DEB packages fetched from a repository** (the normal Debian/Ubuntu trust model): trust comes from the repository's signed `InRelease`/`Release.gpg` metadata, not from a per-package signature — most DEB packages are not individually signed at all. Verify the repository metadata signature (`apt-key`/modern keyring-based verification against the configured repo) rather than relying on `dpkg-sig`, which is an optional, lightly used tool that most Debian-family packages don't carry a signature for in the first place.
+- **DEB packages distributed standalone** (not through a repository, e.g. a vendor's direct `.deb` download): `dpkg-sig --verify` only applies if the vendor actually signed the package with it, which is uncommon — check for a detached GPG signature distributed alongside the file instead, and treat an unsigned standalone DEB the same as any other unsigned vendor artifact (see below).
+- **Standalone ELF binaries or tarballs:** verify against a detached GPG signature where the vendor provides one.
 
 ```bash
-# RPM: verify package signature against imported publisher public key
+# RPM: verify the package's own embedded signature
 rpm --checksig vendor-package.rpm
 
-# DEB: verify signature against imported publisher public key
-dpkg-sig --verify vendor-package.deb
+# APT repository metadata (the actual DEB trust root in the normal case)
+apt-key verify /etc/apt/sources.list.d/vendor.list  # or modern keyring-based equivalent
+gpg --verify InRelease
 
-# Standalone ELF binary or tarball distributed with a detached GPG signature
+# Standalone DEB, ELF binary, or tarball distributed with a detached GPG signature
 gpg --verify vendor-binary.tar.gz.sig vendor-binary.tar.gz
 ```
 
+Store the expected publisher key/repository-signing-key fingerprint in the CMDB key register per publisher, as a **managed trust policy that supports planned key rotation** — not a single value expected to never change. A publisher legitimately rotating their signing key is a normal event, not itself a compromise signal; the CMDB record should carry a rotation history and an expected-transition window, and a Stage 11b thumbprint/key mismatch should route to human review to distinguish a legitimate rotation from an actual compromise, rather than auto-blocking on any change.
+
 Where a vendor does not provide any signature (common for smaller ISVs and some firmware), the artifact is not eligible for the fast-track Tier 3 cooling-off and defaults to Tier 1, since hash verification against a vendor-published checksum page is the only remaining authenticity control.
 
-### NSRL positive-assertion lookup
+### NSRL reference-corpus lookup
 
-The NIST National Software Reference Library (NSRL) is a database of known-good hash values for legitimate software releases. Querying the NSRL provides a positive assertion that the specific file being ingested is a known authentic release, not merely that it has not been flagged as malicious.
+The NIST National Software Reference Library (NSRL) is a reference corpus of hash values collected from software releases submitted to NIST, currently distributed as the RDSv3 dataset in SQLite format. A match tells the pipeline that a file with this hash was previously catalogued as belonging to a known, identifiable software release — that is evidence supporting identification and provenance, **not proof that the file is currently safe, authorised for use, or uncompromised**. NSRL was built for digital forensics (filtering known files out of an investigation), not as a malware or authorisation signal, and this architecture uses it accordingly: as one input to a broader confidence assessment, never as a standalone approval or rejection basis.
 
-The NSRL dataset is available for free download as a bulk database and can be loaded into a local PostgreSQL instance for offline queries. This avoids any external API dependency.
+NIST distributes the current RDS as RDSv3 SQLite files, downloadable in full or as incremental "minimal" sets. The pipeline queries the SQLite file directly, or — if consolidating NSRL alongside other reference data in a shared operational database — ETLs it into PostgreSQL through a documented, versioned import job rather than treating Postgres as the native format. Either way, the exact table and column names must be verified against NIST's current RDSv3 schema documentation at implementation time, since the schema has changed across NSRL releases.
 
 ```python
-def check_nsrl(sha256_hash: str, nsrl_db) -> dict:
+def check_nsrl(sha256_hash: str, nsrl_db, dataset_version: str) -> dict:
+    # Schema (table/column names) must be verified against the current RDSv3
+    # SQLite schema for the NSRL release in use — do not assume this literally.
     cursor = nsrl_db.execute(
-        "SELECT FileName, ProductName, ProductVersion FROM NSRLFile WHERE SHA256 = ?",
+        "SELECT file_name, product_name, product_version FROM file_entry WHERE sha256 = ?",
         (sha256_hash.upper(),)
     )
     result = cursor.fetchone()
     if result:
-        return {"known_good": True, "product": result[1], "version": result[2]}
-    return {"known_good": False}
-    # Not in NSRL does not mean malicious — novel/niche software may not be indexed
-    # Absence of a match requires fallback to other controls, not automatic rejection
+        return {
+            "status": "present_in_nsrl",
+            "product": result[1],
+            "version": result[2],
+            "dataset_version": dataset_version,
+        }
+    return {"status": "not_present", "dataset_version": dataset_version}
+    # not_present does not mean malicious — novel/niche/internal software is routinely absent
+    # present_in_nsrl does not mean currently safe — it is provenance evidence, not a safety verdict
 ```
 
-NSRL coverage is strongest for widely distributed commercial software and well-known open-source releases. Niche tools and internal builds may not be indexed.
+NSRL coverage is strongest for widely distributed commercial software and well-known open-source releases. Niche tools and internal builds may not be indexed. Record `dataset_version` alongside every result so a later reinterpretation of a match can be traced to the specific NSRL release that produced it.
 
 ### MalwareBazaar hash lookup
 
@@ -300,7 +315,14 @@ def check_malwarebazaar(sha256_hash: str) -> bool:
 
 ### VirusTotal hash lookup
 
-VirusTotal aggregates results from 70+ AV engines. Hash-only lookups do not upload the file and are safe for proprietary binaries. The free API allows 500 lookups per day; the paid API supports bulk queries.
+VirusTotal aggregates results from 70+ AV engines. Hash-only lookups do not upload the file and are safe for proprietary binaries. The free (Public) API allows 500 lookups per day; the paid (Premium) API supports bulk queries and is licensed for commercial/business-workflow automation.
+
+**Flagged for capacity planning, not removed from the architecture:** this architecture uses the VirusTotal Public API as the default for both Stage 6 intake lookups and Stage 11b retroactive recheck. Two things make the 500/day free-tier limit a growing constraint rather than a fixed one:
+
+- **Stage 11b is not a one-time scan — it is a recurring scan of the entire approved inventory.** Every artifact promoted through this pipeline adds a permanent line item to future recheck runs. A 500-lookup daily budget that comfortably covers a few hundred artifacts today will be exhausted well before the inventory reaches a few thousand, purely from the Tier 1 nightly rotation described in Stage 11b — independent of Stage 6 intake volume on top of it.
+- **VirusTotal's Public API terms restrict use in commercial products, services, or automated business workflows.** An enterprise intake pipeline that runs unattended, nightly, against production infrastructure is exactly the kind of automated business workflow the Public API terms are written to exclude. This is a licensing question the organisation needs to resolve, independent of whether the rate limit itself is ever hit — sustained automated use of the Public API in this architecture should be treated as a compliance gap to close, not a cost-optimisation choice to defer indefinitely.
+
+Track inventory size and daily lookup volume from the day this goes live, and treat "does the recheck job still fit inside the free tier, and are we still within the Public API's permitted use, today" as a standing question for the Stage 11b rate-limit budgeting described below and the licensing decision in "Open issues for internal review."
 
 ```python
 def check_virustotal_hash(sha256_hash: str, api_key: str) -> int:
@@ -339,9 +361,11 @@ This is treated as a distinct control surface rather than folded into Stage 4/5/
 
 **GitLab CE** is the system of record for the intake request, approval workflow, and audit trail. It holds who requested the artifact, when, why, what approvals were given, when they expire, and all transitions and comments. The GitLab issue number is written as a tag to the Nexus artifact at intake, linking the binary permanently to its approval record.
 
-**Nexus Repository Pro** is the system of record for the artifact itself and its intake provenance metadata. It holds the binary, the hashes, the source URL, the intake timestamp, and the custom metadata tags written during the pipeline run. Every artifact — open-source or proprietary — is stored here. Nexus custom tags carry the requestor name, approver, approval expiry, risk tier, KB number, CVE list, vendor severity, Authenticode thumbprint verified, NSRL result, and MalwareBazaar result directly on the component record.
+**Nexus Repository Pro** is the system of record for the artifact bytes themselves, canonical hashes, source URL, and intake timestamp. Every artifact — open-source, proprietary, or model — is stored here.
 
-**OWASP Dependency-Track** is the system of record for SBOM contents, component vulnerability findings, policy violations, and where-used analysis. It is used exclusively for artifacts where a meaningful SBOM exists: open-source packages and container images. Proprietary binaries must not be represented in Dependency-Track with empty SBOMs — an empty entry creates false assurance of coverage.
+**Evidence database** (a schema the organisation stands up separately, not a Nexus built-in) is the system of record for the rich, per-artifact provenance and verdict data this architecture generates: requestor name, approver, approval expiry, risk tier, KB number, CVE list, vendor severity, platform signature verification results, NSRL result, MalwareBazaar result, and every other data point the tables below list against a given artifact. **Nexus's own Tags API applies tags at the component level** — a compact set of key-value labels intended for search and lifecycle filtering, not a substitute for a strongly typed per-artifact record, and it does not cleanly distinguish between multiple assets that can exist under one Nexus component (for example, a Maven component's jar, pom, and sources assets, or a multi-architecture container image). Use Nexus tags for compact lookup identifiers and lifecycle state (e.g. `intake-ticket-ref`, `lifecycle-state`, `risk-tier`); use the evidence database, keyed by repository, format, component coordinates, asset path, and SHA-256, for everything else. Throughout the data-mapping tables below, "Nexus Pro (tag)" refers to a compact lookup/lifecycle value stored as an actual Nexus tag; the authoritative full record for that data point lives in the evidence database and is only mirrored into Nexus as a short tag where useful for search.
+
+**OWASP Dependency-Track** is the system of record for SBOM contents, component vulnerability findings, policy violations, and where-used analysis. It is used exclusively for artifacts where a meaningful SBOM exists: open-source packages and container images. Proprietary binaries must not be represented in Dependency-Track with empty SBOMs — an empty entry creates false assurance of coverage. **"Where-used" in Dependency-Track means which projects and BOM relationships reference a component** — a build-time/release-manifest relationship, not proof that the component is installed and running on a specific host today. Do not treat a Dependency-Track where-used result as equivalent to a runtime deployment inventory; use it to scope which project teams to notify of a CVE, and use CMDB, EDR, container orchestration, or deployment telemetry (see Stage 10) to identify actual deployed instances for recall.
 
 **CMDB** (ServiceNow, GitLab-hosted database, or Ralph) is the system of record for the deployment inventory of proprietary software and the publisher certificate thumbprint register. It records what commercial software is approved, at what version, which systems have it deployed, the expected Authenticode certificate thumbprint for each publisher, and the vendor advisory subscription reference for ongoing monitoring.
 
@@ -349,7 +373,7 @@ This is treated as a distinct control surface rather than folded into Stage 4/5/
 
 **Recheck job datastore** (PostgreSQL table or equivalent): stores the results of each Stage 11b retroactive recheck run — artifact hash, recheck date, VirusTotal result, MalwareBazaar result, YARA result, NSRL result, platform signature recheck result, disposition (blocked, flagged, confirmed false positive, clean), and any recall actions taken. A confirmed-false-positive disposition suppresses future alerts on that specific hash/signal combination until the artifact hash or the matching rule changes, so the same reviewed finding does not re-open on every scheduled run. This provides a queryable history of recheck verdicts for audit purposes.
 
-**Model registry metadata** (Nexus custom tags plus CMDB, or a dedicated model registry such as MLflow if already deployed): holds the pinned hub revision SHA, source hub and namespace, model card contents, license classification, base-model lineage, and pickle-scan result for every model artifact. The pinned revision SHA is the field Stage 11b rechecks against the hub to detect silent repoint.
+**Model registry metadata** (Nexus custom tags plus CMDB, or a dedicated model registry such as MLflow if already deployed): holds the pinned hub revision SHA, source hub and namespace, model card contents, license classification, base-model lineage, and pickle-scan result for every model artifact. The pinned revision SHA itself is immutable and never changes once stored — what Stage 11b rechecks is whether the mutable branch/tag reference the artifact was originally requested against (the **mutable-source-reference**) has since drifted to a different commit than the one pinned in Nexus.
 
 **Remediation tracking**: the CMDB deployment records (for proprietary and model artifacts) and Dependency-Track where-used analysis (for open source) are queried by the recall workflow to identify systems with a recalled artifact already deployed, not only systems that could fetch it. Where WSUS, SCCM, Intune, or a configuration management tool (Ansible, etc.) is available, the recall workflow triggers a push remediation task against those identified systems rather than relying on the owner to act on a notification alone.
 
@@ -373,7 +397,7 @@ This is treated as a distinct control surface rather than folded into Stage 4/5/
 | Policy violations | Dependency-Track | License, vulnerability severity, and age policies |
 | Where-used (which projects use this component) | Dependency-Track | Cross-referenced via SBOM component PURLs |
 | MalwareBazaar result at intake | Nexus Pro (tag) | Recorded at Stage 6; updated by Stage 11b recheck |
-| NSRL lookup result at intake | Nexus Pro (tag) | known_good / not_indexed — recorded at Stage 6 |
+| NSRL lookup result at intake | Nexus Pro (tag) | present_in_nsrl / not_present, plus dataset_version — recorded at Stage 6; a match is provenance evidence, not a safety verdict |
 | YARA scan verdict | Nexus Pro (tag and attached JSON) | Updated by Stage 11b re-scan with new rulesets |
 | VirusTotal hash result at intake | Nexus Pro (tag) | Engine count; updated by Stage 11b recheck |
 | Sandbox detonation report | Nexus Pro (attached file) | CAPE private sandbox for high-risk open-source |
@@ -394,7 +418,7 @@ This is treated as a distinct control surface rather than folded into Stage 4/5/
 | Authenticode certificate thumbprint (actual) | Nexus Pro (tag) | Extracted at intake, compared against CMDB expected value |
 | Expected Authenticode thumbprint | CMDB (publisher certificate register) | Maintained per publisher; updated when publisher rotates cert |
 | Thumbprint match result | Nexus Pro (tag) | Match / Mismatch — mismatch blocks pipeline |
-| NSRL lookup result | Nexus Pro (tag) | known_good / not_indexed |
+| NSRL lookup result | Nexus Pro (tag) | present_in_nsrl / not_present, plus dataset_version — a match is provenance evidence, not a safety verdict |
 | MalwareBazaar result at intake | Nexus Pro (tag) | Recorded at Stage 6; updated by Stage 11b recheck |
 | YARA scan verdict | Nexus Pro (tag and attached JSON) | Updated by Stage 11b re-scan |
 | VirusTotal hash result | Nexus Pro (tag) | Hash-only lookup; safe for proprietary artifacts |
@@ -407,10 +431,11 @@ This is treated as a distinct control surface rather than folded into Stage 4/5/
 | CVEs addressed by this artifact | Nexus Pro (tag) and CMDB | Sourced from vendor advisory |
 | Vendor severity rating | Nexus Pro (tag) and CMDB | Critical, Important, Moderate, or Low |
 | Affected product scope | CMDB | Which product versions apply |
-| SBOM | Not applicable | Cannot be generated from closed-source binary |
+| SBOM (full, tool-generated) | Not applicable | Syft-class tools cannot generate one from a closed-source binary |
+| Partial/vendor BOM (if available) | Nexus Pro (attached) and evidence database | Accepted when the vendor publishes one; generated where binary composition analysis is technically feasible. Record `coverage`, `generator`, `source`, and `confidence` fields — never presented as complete when it isn't |
 | Ongoing CVE monitoring | CMDB and vendor bulletin subscription and NVD CPE watch | Not Dependency-Track |
 | Deployment inventory | WSUS, SCCM, or Intune (Microsoft patches) or CMDB | Records which systems have the artifact installed |
-| Private sandbox detonation report | Nexus Pro (attached file) | CAPE private sandbox only — mandatory |
+| Dynamic/specialised analysis report | Nexus Pro (attached file) | Profile-appropriate private analysis — mandatory; tool depends on platform (CAPE, disposable Linux VM, firmware extraction/emulation) per the Stage 6 analysis profiles table |
 | Stage 11b recheck history | Recheck job datastore | Queryable history of all periodic recheck verdicts |
 
 ### Data mapping: firmware and hardware drivers
@@ -421,7 +446,7 @@ This is treated as a distinct control surface rather than folded into Stage 4/5/
 | SHA-256 and SHA-512 hashes | Nexus Pro | Verified against vendor-published hash |
 | Vendor advisory or release notes | Nexus Pro (attached) and CMDB | Describes CVEs addressed and affected hardware |
 | Authenticode validity | Nexus Pro (tag) | Where applicable for signed drivers |
-| NSRL lookup result | Nexus Pro (tag) | known_good / not_indexed |
+| NSRL lookup result | Nexus Pro (tag) | present_in_nsrl / not_present, plus dataset_version — a match is provenance evidence, not a safety verdict |
 | MalwareBazaar result | Nexus Pro (tag) | Recorded at intake and updated by Stage 11b |
 | Target hardware model and version | CMDB | Which device types and hardware revisions apply |
 | Deployment status | CMDB (device inventory) | Which physical devices have been updated |
@@ -439,9 +464,10 @@ This is treated as a distinct control surface rather than folded into Stage 4/5/
 | Serialization format | Nexus Pro (tag) | `safetensors` / GGUF / legacy-pickle-under-exception |
 | Pickle static-scan result | Nexus Pro (tag) and attached JSON | Required for any non-`safetensors`/GGUF format; hard block on unsafe opcodes |
 | Publisher/org verification status | Nexus Pro (tag) | Hub verified-org badge present or absent |
+| ML-BOM (CycloneDX) | Model registry metadata and Nexus (attached) | Captured at Stage 5c; not uploaded to Dependency-Track — no meaningful PURL/CVE correlation for model weights |
 | Model card, license, dataset provenance | Model registry metadata and Nexus (attached) | Captured at Stage 5c |
 | Base model lineage (for fine-tunes/adapters) | Model registry metadata | Declared upstream base model and revision |
-| Isolated load-test result | Nexus Pro (attached report) | No-egress sandbox: process spawn, filesystem, and network activity during load |
+| Isolated load-test result | Nexus Pro (attached report) | No-egress sandbox: process spawn, filesystem, and network activity, plus resource-limit compliance (bytes, tensor dimensions, RAM/CPU/GPU time, temp disk, archive depth/compression ratio) during load |
 | MalwareBazaar result at intake | Nexus Pro (tag) | Recorded at Stage 6; updated by Stage 11b recheck |
 | Requestor name, approver, expiry | Nexus Pro (tag) and GitLab issue | Same pattern as Path A/B |
 | Risk tier | Nexus Pro (tag) | Model artifacts default to Tier 1 or 2 |
@@ -480,10 +506,24 @@ Specific RPO/RTO targets and backup tooling are an implementation decision for P
 - Block direct package downloads from endpoints, CI systems, and servers.
 - Apply dependency-confusion prevention rules for open-source ecosystems.
 - Log every fetch attempt including failures so unauthorised download attempts are visible in the SIEM.
+- **Harden the fetch path against server-side request forgery (SSRF), not just domain allowlisting.** This proxy is a high-privilege, server-side URL fetcher acting on arbitrary requestor-supplied source URLs, which is exactly the profile of an SSRF target: an allowlisted domain that redirects to an internal address, or a hostname that resolves to an internal IP at fetch time even though it resolved externally at allowlist-review time, defeats a domain-only allowlist. Required controls:
+  - Revalidate every redirect hop and the final resolved destination against the allowlist — do not allowlist only the initial request URL.
+  - Block resolution to loopback, link-local, RFC 1918 private ranges, cloud metadata-service addresses (e.g. `169.254.169.254`), and internal-only DNS zones, regardless of what domain name was requested.
+  - Defend against DNS rebinding: re-resolve and re-validate the destination IP immediately before connecting, not only at allowlist-check time, and pin the connection to the validated IP rather than re-resolving mid-connection.
+  - Enforce TLS certificate validation, hostname verification, connection timeouts, and a maximum redirect count.
+  - Verify downloaded file magic bytes against the artifact type declared at intake; a mismatch is a signal worth flagging even before Stage 4 integrity checks run.
 
 ### Stage 3 · Quarantine repository
 
-- Store all newly downloaded artifacts in immutable staging before any team can consume them.
+**This stage is three distinct capabilities that earlier revisions of this document described as one.** Keep them conceptually and, where the selected products require it, technically separate:
+
+1. **Ecosystem proxy control** — for artifact types fetched through a package-ecosystem proxy (npm, PyPI, Maven, apt/yum), a policy engine can intercept and quarantine the request before the artifact ever reaches storage. Sonatype Repository Firewall (via IQ Server) is a product example of this capability, and it is separately licensed from generic repository hosting — see the tooling guide's licensing and edition decision matrix. This capability does not exist for artifact types that don't move through an ecosystem proxy at all, which includes most of Path B and all of Path C.
+2. **Enterprise intake evidence store** — an immutable staging area holding the exact downloaded bytes, canonical hashes, and every piece of acquisition and analysis evidence, for *every* artifact type including proprietary binaries, firmware, and models that have no ecosystem proxy to sit behind. This is the capability the rest of this section describes, and it is required regardless of whether ecosystem proxy control is also licensed.
+3. **Approved distribution repositories** — the format-specific hosted repositories consumers actually pull from after promotion (Stage 10).
+
+A product that provides capability 1 does not automatically provide capability 2 for artifact types outside its proxy scope — do not assume a single licensed product covers all three without checking.
+
+- Store all newly downloaded artifacts in immutable staging (capability 2, above) before any team can consume them.
 - Preserve original source URL, intake timestamp, transport metadata, and canonical hashes.
 - Tag each artifact at intake with its artifact type, risk tier, and GitLab intake ticket reference.
 - Store the SHA-256 hash as a searchable component attribute — this is the key used by the Stage 11b retroactive recheck job to query threat intelligence sources.
@@ -492,7 +532,7 @@ Specific RPO/RTO targets and backup tooling are an implementation decision for P
 
 **Path A (open source):** Validate vendor checksums, signatures, certificate chains, notarisation, and provenance data. Check for dependency-confusion indicators. For Windows PE binaries, verify Authenticode signature validity and compare the signing certificate thumbprint against the expected publisher value. Fail closed when integrity claims do not validate.
 
-**Path B (proprietary binary):** Compare the SHA-256 of the downloaded file against the vendor's published catalog hash. Verify the platform signature: Authenticode on Windows, GPG/RPM/DEB signature on Linux — both baseline controls for this estate. `codesign`/notarization on macOS is available for the rare case a macOS artifact is submitted, but is not a baseline requirement (see "Platform scope caveat" under Binary authentication controls); until built, a macOS submission falls back to hash verification plus Tier 1 cooling-off. Compare the actual signing identity (certificate thumbprint or GPG key fingerprint) against the expected publisher value stored in the CMDB. Perform NSRL positive-assertion lookup. Any of the following blocks the artifact: hash mismatch, invalid or missing platform signature where one is expected, signing identity mismatch against the expected publisher. Do not attempt SBOM generation on proprietary binaries.
+**Path B (proprietary binary):** Compare the SHA-256 of the downloaded file against the vendor's published catalog hash. Verify the platform signature: Authenticode on Windows, GPG/RPM/DEB signature on Linux — both baseline controls for this estate. `codesign`/notarization on macOS is available for the rare case a macOS artifact is submitted, but is not a baseline requirement (see "Platform scope caveat" under Binary authentication controls); until built, a macOS submission falls back to hash verification plus Tier 1 cooling-off. Compare the actual signing identity (certificate thumbprint or GPG key fingerprint) against the expected publisher value stored in the CMDB. Perform NSRL positive-assertion lookup. Any of the following blocks the artifact: hash mismatch, invalid or missing platform signature where one is expected, signing identity mismatch against the expected publisher. Do not attempt tool-generated SBOM extraction on proprietary binaries — Syft-class tools cannot produce meaningful results from a closed-source binary — but do accept a vendor-published SBOM where one exists, and capture it with explicit coverage/confidence metadata rather than treating "closed-source" as synonymous with "zero available component data."
 
 **Path C (AI/ML model artifact):** Resolve and pin the exact hub commit SHA for the requested model — reject requests pinned only to a mutable branch or tag. Compare the downloaded SHA-256 against the hub's own published file hash where available. Verify the file is `safetensors` or GGUF format; route any other format to the mandatory pickle static-scan exception path. Record the hub publisher/organisation verification status. A pickle static scan that finds code-execution opcodes is a hard block, not an exception-eligible finding.
 
@@ -502,7 +542,7 @@ Specific RPO/RTO targets and backup tooling are an implementation decision for P
 
 **Path B (proprietary binary):** Capture the vendor advisory record — KB number or equivalent, CVEs addressed, vendor severity, affected product versions. Store as a structured JSON attachment in Nexus and write summary fields as Nexus component metadata tags. Write the full advisory record to the CMDB entry. Do not create an empty SBOM entry in Dependency-Track.
 
-**Path C (AI/ML model artifact):** Capture the model card, license classification (including non-commercial/research-only variants that block production use), declared training data provenance where published, and base-model lineage for fine-tunes and adapters. Store as a structured JSON attachment in Nexus and write summary fields as Nexus component metadata tags, mirroring the Stage 5b pattern. Write the full record to the model registry metadata store. Do not create an empty SBOM entry in Dependency-Track.
+**Path C (AI/ML model artifact):** Generate a **CycloneDX ML-BOM** — CycloneDX's machine-learning bill-of-materials extension, which records model files and hashes, source namespace, the pinned immutable revision, license, declared datasets, base-model lineage, and framework/runtime requirements in a structured, machine-readable format. This is not the same thing as "no SBOM applies": a proprietary binary genuinely has no source-derived component list to extract, but a model does have real, capturable provenance data, and CycloneDX has a purpose-built schema for it. Alongside the ML-BOM, capture the human-readable model card content, license classification (including non-commercial/research-only variants that block production use), declared training data provenance where published, and base-model lineage for fine-tunes and adapters. Store the ML-BOM and model card as structured JSON attachments in Nexus and write summary fields as Nexus component metadata tags, mirroring the Stage 5b pattern. Write the full record to the model registry metadata store. **Do not upload the ML-BOM to Dependency-Track** — Dependency-Track's vulnerability matching is built around package-manager component identifiers (PURLs) tied to CVE feeds that don't cover model weights, so an ML-BOM entry there would not produce meaningful CVE correlation and would misrepresent coverage the same way an empty SBOM would.
 
 ### Stage 6 · Malware and sandbox screening
 
@@ -510,11 +550,32 @@ Specific RPO/RTO targets and backup tooling are an implementation decision for P
 - Perform MalwareBazaar hash lookup for all artifacts. A positive match (hash found in MalwareBazaar) is a hard block.
 - Perform NSRL lookup as a positive-assertion check. Record the result in Nexus metadata regardless of outcome — absence from NSRL is not a block but is noted.
 - For open-source packages: VirusTotal hash-only lookup where policy permits.
-- For proprietary binaries: VirusTotal hash-only lookup (safe — hash reveals no file content). Submit exclusively to private CAPE sandbox for dynamic analysis. No external file submission.
-- Mandatory private CAPE sandbox detonation for all proprietary binaries, drivers, and firmware regardless of hash match, platform signature validity, or vendor reputation. A hash match proves the binary matches the vendor release; it does not prove the vendor release is clean.
-- For AI/ML model artifacts: load the model inside a no-egress, syscall-monitored sandbox (not CAPE's Windows-guest design). Fail the artifact if the load spawns a child process, writes outside the working directory, or attempts an outbound network connection. This is the primary dynamic control for the pickle-deserialization threat that static scanning can only partially catch, since obfuscated opcode sequences can evade a pattern-based static scan.
-- Where static analysis cannot fully unpack a sample — commercial packers/protectors (Themida, VMProtect) on proprietary installers, or archive-based model bundles with nested compression — record the scan as inconclusive rather than clean, and require CAPE/load-test detonation regardless of static scan outcome. An inconclusive static result does not, by itself, block promotion, but it removes static scanning as a basis for reducing sandbox scrutiny.
-- Record and attach sandbox detonation or load-test reports to the artifact record in Nexus. Record all hash lookup results as Nexus component tags.
+- For proprietary binaries: VirusTotal hash-only lookup (safe — hash reveals no file content). No external file submission for dynamic analysis; dynamic analysis stays private, per the analysis profile below.
+
+**Dynamic analysis is selected by artifact platform and format, not applied as one blanket control.** Earlier revisions of this document specified "mandatory CAPE sandbox detonation for all proprietary binaries, drivers, and firmware," which is not implementable as written — CAPE is fundamentally a Windows-guest malware sandbox and cannot meaningfully execute Linux packages, arbitrary firmware images, device drivers, or model files. A hash match proves a binary matches the vendor release; it does not prove the vendor release is clean, so *some* dynamic or specialised analysis remains mandatory for every artifact type — but which analysis depends on what the artifact actually is:
+
+| Profile | Typical artifacts | Dynamic or specialised analysis |
+|---|---|---|
+| Windows user mode | EXE, MSI, DLL, scripts | CAPE sandbox or an isolated Windows test VM |
+| Windows kernel | Drivers | Signature and catalog checks, static driver analysis, isolated test VM/hardware where supported — CAPE's user-mode guest does not exercise kernel-mode code paths |
+| Linux | ELF, RPM, DEB, shell installers | Disposable Linux VM, Kata, or gVisor with syscall and network monitoring (the same no-egress isolation pattern used for models, below) |
+| Firmware | Images, update capsules | Firmware extraction and file-system analysis, binwalk-style static inspection, vendor signature checks, and QEMU/FirmAE emulation or test hardware where feasible |
+| Containers | OCI images | Layer/SBOM analysis (Path A) plus sandboxed runtime behaviour tests |
+| AI/ML models | Safetensors, GGUF, legacy checkpoints | Resource-limited, no-egress, syscall-monitored load harness (see Path C) — not CAPE's Windows-guest design |
+| Non-executable data | Archives, datasets | Structural validation, content policy checks, decompression-bomb and archive-depth limits |
+
+Each profile must return one of four outcomes, and the pipeline must define fail-closed behaviour for the last two:
+
+- **PASS** — analysis completed and found no malicious indicators.
+- **FAIL** — analysis completed and found malicious or policy-violating behaviour. Hard block.
+- **INCONCLUSIVE** — analysis ran but could not reach a definitive verdict (e.g. a packed binary that could not be fully unpacked, or a firmware image that resisted extraction). Do not treat as PASS; require compensating controls (additional manual review or escalation, since a lower cooling-off tier is not available for an inconclusive result) before promotion.
+- **UNAVAILABLE** — no analysis profile exists for the detected artifact format/platform, or the required sandbox capacity is not provisioned. Fail closed: block promotion until either the format is added to a supported profile or an explicit, time-bound, signed exception is granted at a risk tier the artifact would not otherwise qualify for.
+
+For AI/ML model artifacts specifically: load the model inside a no-egress, syscall-monitored sandbox (not CAPE's Windows-guest design), with hard limits on total bytes, declared tensor dimensions, RAM/CPU/GPU allocation and time, temporary disk use, and archive depth/compression ratio. Fail the artifact if the load spawns a child process, writes outside the working directory, attempts an outbound network connection, or exceeds any resource limit. This is the primary dynamic control both for the pickle-deserialization threat that static scanning can only partially catch (since obfuscated opcode sequences can evade a pattern-based static scan) and for resource-exhaustion attacks — a decompression bomb or a maliciously oversized declared tensor shape can deny service even in a format with no code-execution surface at all, such as `safetensors`.
+
+Where static analysis cannot fully unpack a sample — commercial packers/protectors (Themida, VMProtect) on proprietary installers, or archive-based model bundles with nested compression — record the result as **INCONCLUSIVE**, not PASS, and require the profile-appropriate dynamic analysis regardless of static scan outcome.
+
+Record and attach sandbox detonation, load-test, or specialised-analysis reports to the artifact record in Nexus, including the profile used and its PASS/FAIL/INCONCLUSIVE/UNAVAILABLE outcome. Record all hash lookup results as Nexus component tags.
 
 ### Stage 7 · Cooling-off delay
 
@@ -532,7 +593,7 @@ Specific RPO/RTO targets and backup tooling are an implementation decision for P
 ### Stage 9 · Promotion review
 
 - Promote the already-verified artifact — not a re-download from the internet. Chain of custody must be unbroken.
-- Require sign-off from both a security reviewer and the named artifact owner.
+- Require sign-off from both a security reviewer and the named artifact owner, **enforced by the platform, not merely documented as policy.** Verify the selected request-portal product and licence tier actually blocks promotion on missing or insufficient approval before relying on this control — a portal product whose free/community tier only offers an optional, non-blocking approval widget does not satisfy this requirement as written, and either a higher licence tier or an equivalent enforced gate (e.g., a required automated status check tied to a separate approval-record system) must be substituted. See the tooling guide's licensing and edition decision matrix for the specific gap this creates on a GitLab Community Edition deployment.
 - For proprietary path: confirm vendor advisory record is complete, CMDB entry created with expected platform signing identity recorded, and vendor bulletin subscription reference documented before promotion.
 - For model path: confirm model card, license, and lineage record is complete, pinned hub revision SHA recorded as the drift-detection baseline, and CMDB entry created before promotion.
 - Confirm the governing approval has not expired.
@@ -545,7 +606,7 @@ Specific RPO/RTO targets and backup tooling are an implementation decision for P
 - For model artifacts: deployment tracked through CMDB, keyed to the pinned hub revision so a consuming application can be distinguished from one running an unpinned or later revision of the same model.
 - CMDB entries for proprietary artifacts must include: artifact name and version, Nexus reference, intake ticket reference, named owner, approval expiry, expected platform signing identity, vendor bulletin subscription reference, deployment scope, and next review date.
 - CMDB entries for model artifacts must include: model name and pinned hub revision, Nexus reference, intake ticket reference, named owner, approval expiry, license classification, and deployment scope.
-- Recall workflows query the CMDB/WSUS/Intune deployment records (proprietary and model) or Dependency-Track where-used analysis (open source) to identify systems where a recalled artifact is already deployed, and trigger a push remediation task through the available deployment tool rather than relying on notification alone. Where no push mechanism exists for a given artifact type or environment, that gap is tracked explicitly — see "Open issues for internal review."
+- Recall workflows use the CMDB/WSUS/Intune deployment records (proprietary and model) or actual runtime deployment telemetry — CMDB, EDR, or container/orchestration inventory, not Dependency-Track where-used alone — to identify systems where a recalled artifact is already deployed, and trigger a push remediation task through the available deployment tool rather than relying on notification alone. For open source, Dependency-Track where-used analysis scopes *which project teams* to notify (it reflects BOM/build relationships, not confirmed runtime installation); a separate deployment-inventory source is required to know which systems actually need remediation. Where no push mechanism exists for a given artifact type or environment, that gap is tracked explicitly — see "Open issues for internal review."
 
 ### Stage 11a · Continuous CVE recheck
 
@@ -569,13 +630,13 @@ The recheck job performs the following steps:
 
 **Step 4 — YARA re-scan with updated rulesets.** Pull each artifact binary from Nexus and re-scan with the current YARA ruleset. Update the YARA ruleset from community feeds (Elastic, VirusTotal community rules) on a scheduled basis. New rules published in response to newly discovered campaigns will match artifacts that passed the original intake scan. The XZ Utils supply chain attack is an example: a YARA rule published after discovery would have flagged the compromised package in any organisation's inventory that ran periodic re-scans.
 
-**Step 5 — NSRL recheck.** Recheck hashes against the NSRL database. Flag any artifact where the NSRL database has been updated to add a known-bad status for that hash (rare, but possible when NIST updates the dataset).
+**Step 5 — NSRL recheck.** Recheck hashes against the current RDSv3 dataset and record the `present_in_nsrl` / `not_present` status alongside the `dataset_version` used. NSRL is a reference corpus, not a malware-intelligence feed — it has no "known-bad" status, and this architecture does not treat a change in NSRL presence as a recall trigger on its own. Use this step only to keep provenance evidence current; negative assertions (this artifact is now known-malicious) come from MalwareBazaar, VirusTotal, YARA, revocation checks, and vendor recall notices, not from NSRL.
 
-**Step 6 — Authenticode recheck for Windows PE binaries.** Re-verify the Authenticode signature chain for all Windows PE binaries in the approved inventory. Verify that the signing certificate has not been revoked using OCSP or CRL checks. A revoked certificate on a previously approved binary is a strong signal of a compromised build infrastructure or signing key.
+**Step 6 — Authenticode recheck for Windows PE binaries.** Re-verify the Authenticode signature chain for all Windows PE binaries in the approved inventory. Verify that the signing certificate has not been revoked using OCSP or CRL checks. A revoked certificate on a previously approved binary is a strong signal of a compromised build infrastructure or signing key — **but do not treat a bare "revoked" OCSP response as sufficient grounds for an immediate automated block on its own.** Evaluate, alongside the revocation status: whether the file carries a valid trusted timestamp (RFC 3161) proving it was signed *before* the revocation took effect — a validly timestamped signature on a since-revoked certificate is expected, routine behaviour, not a compromise signal; the certificate chain's validity at signing time versus at evaluation time; the revocation reason code (key compromise is a strong signal, routine cert expiry/superseding is not); and the revocation's effective date relative to when this artifact was signed. Only an untimestamped signature, or a signature that post-dates a key-compromise revocation, should trigger the immediate automated block described below — the rest route to human review.
 
-**Step 7 — Targeted CAPE recheck on IOC alerts.** When a new threat intelligence report publishes indicators of compromise (file hashes, process behaviour patterns, C2 domains), cross-reference the IoCs against the Nexus inventory and trigger a CAPE sandbox re-detonation for any matching artifacts.
+**Step 7 — Targeted re-detonation on IOC alerts.** When a new threat intelligence report publishes indicators of compromise (file hashes, process behaviour patterns, C2 domains), cross-reference the IoCs against the Nexus inventory and trigger re-detonation for any matching artifacts, using whichever analysis profile matches the artifact's platform (CAPE for Windows, the disposable Linux VM for Linux, the load-test harness for models) — not CAPE alone.
 
-**Step 8 — Model hub revision drift recheck.** For Path C artifacts, re-query the source hub for the current commit SHA on the reference the artifact was originally pinned from. If the hub's current SHA no longer matches the pinned SHA recorded at intake, this does not by itself mean the pinned artifact in Nexus has changed — Nexus stores the immutable file — but it is a signal that anything still resolving the model by branch/tag name outside this pipeline (a developer running `from_pretrained()` directly against the hub) would now receive a different, unreviewed file. Flag for human review.
+**Step 8 — Mutable-source-reference drift recheck.** For Path C artifacts, re-query the source hub for the current commit SHA on the reference the artifact was originally pinned from. If the hub's current SHA no longer matches the pinned SHA recorded at intake, this does not by itself mean the pinned artifact in Nexus has changed — Nexus stores the immutable file, and a pinned commit SHA cannot itself drift — but it is a signal that the mutable branch or tag name has moved, so anything still resolving the model that way outside this pipeline (a developer running `from_pretrained()` directly against the hub, without pinning a revision) would now receive a different, unreviewed file. Flag for human review.
 
 **Rate-limit and coverage budgeting.** External lookup services are rate-limited (VirusTotal's free tier is 500 lookups/day; MalwareBazaar and NSRL have their own practical limits at bulk-query volume). As the approved inventory grows, a nightly full-inventory recheck can exceed these budgets. The recheck job allocates its daily query budget by risk tier — Tier 1 and developer-toolchain artifacts are rechecked every scheduled run; Tier 2 and Tier 3 artifacts are queued and rechecked on a rotating schedule sized to fit the remaining budget — so that coverage degrades predictably (a defined, reported staleness window per tier) rather than silently (some artifacts never getting rechecked without anyone noticing). The coverage rotation schedule and the paid-tier upgrade threshold are implementation decisions — see "Open issues for internal review."
 
@@ -588,9 +649,10 @@ The recheck job performs the following steps:
 | MalwareBazaar positive match | Immediate automated block in Nexus; GitLab recall issue opened; named owner notified |
 | VirusTotal 2+ engine detections | GitLab recall issue opened for human review; artifact not automatically blocked |
 | YARA rule match on updated ruleset | GitLab recall issue opened for human review; risk tier determines urgency |
-| Authenticode certificate revoked (or macOS/Linux signing identity equivalent) | Immediate automated block; GitLab recall issue opened |
+| Authenticode certificate revoked for key-compromise reason, with no valid trusted timestamp predating revocation (or macOS/Linux signing identity equivalent) | Immediate automated block; GitLab recall issue opened |
+| Authenticode certificate revoked, but a valid trusted timestamp predates the revocation, or the revocation reason is routine (expiry/superseded) | GitLab recall issue opened for human review; not an automatic block — this is expected behaviour for legitimately signed artifacts, not evidence of compromise |
 | Certificate thumbprint / Team ID / GPG key changed | GitLab recall issue opened for human review |
-| NSRL status changed | Note recorded; human review triggered |
+| NSRL presence status changed since intake | Note recorded in recheck datastore for provenance history; not a recall trigger on its own — NSRL asserts identification, not current safety |
 | CAPE IOC match on recheck | Immediate automated block; GitLab recall issue opened |
 | Model hub pinned revision no longer matches current hub HEAD on reference | GitLab recall issue opened for human review; not an automatic block, since the pinned Nexus artifact itself is unchanged |
 | Finding matches a prior confirmed-false-positive disposition | Suppressed — recheck timestamp updated, no new alert |
@@ -608,7 +670,8 @@ All recheck verdicts are written to the recheck job datastore with artifact hash
 | Multi-ecosystem proxy support | Must support npm, PyPI, Maven, NuGet, apt/yum, containers, and generic binaries. |
 | Deny-by-default egress | Allowlisted outbound access reduces unsanctioned downloads for all artifact types. |
 | Dependency-confusion prevention | Must detect and block requests where an internal package name resolves to a public registry artifact. Open-source path only. |
-| Custom metadata tags on artifacts | Must support arbitrary key-value metadata so intake provenance, Authenticode results, NSRL results, MalwareBazaar results, and approval references can be stored alongside the binary. |
+| Custom metadata tags on artifacts | Must support compact key-value tags for lookup and lifecycle state at the component level, sufficient to index into the separate evidence database — not a requirement that the repository product itself store the full provenance record. |
+| Per-artifact evidence database | A strongly typed, separately administered database keyed by repository, format, component coordinates, asset path, and SHA-256, holding the full intake provenance, verdict, and recheck-history record for every artifact. This is a required capability of the overall architecture regardless of which repository product is chosen, since no evaluated repository product's native tagging model is a substitute for it. |
 | Quarantine and promotion workflow | Staging and promotion must create auditable state transitions applicable to both paths. |
 | Strong identity controls | SSO, MFA, RBAC, and API-driven approvals across all systems. |
 | Tamper-evident audit logs | All package decisions and actions must be reviewable for audits and incident response. |
@@ -642,9 +705,11 @@ All recheck verdicts are written to the recheck job datastore with artifact hash
 | Developer toolchain (compilers, SDKs) | Partial — if open source | DT or vendor advisory | Full recheck suite — highest priority | Nexus + DT or CMDB | CMDB (privileged tools) |
 | IaC modules and plugins | Yes — via Syft | Dependency-Track + secrets scan | VT hash + MalwareBazaar + YARA | Nexus + Dependency-Track | CI/CD pipeline config |
 | Internal or vendored packages | Yes — generated at build | Dependency-Track | VT hash + MalwareBazaar + YARA | Nexus + Dependency-Track | Dependency-Track where-used |
-| AI/ML model weights (safetensors/GGUF) | No — model card + lineage record | Hub advisory watch + revision-drift recheck | MalwareBazaar + YARA + hub-revision-drift | Nexus tags + Model registry + CMDB | CMDB (pinned revision) |
-| AI/ML model checkpoints (legacy pickle, exception path) | No — model card + lineage record | Hub advisory watch + revision-drift recheck | MalwareBazaar + YARA + pickle re-scan + hub-revision-drift — highest priority | Nexus tags + Model registry + CMDB | CMDB (pinned revision) |
-| LoRA / adapter weights | No — model card + base-model lineage | Hub advisory watch + revision-drift recheck | MalwareBazaar + YARA + hub-revision-drift | Nexus tags + Model registry + CMDB | CMDB (pinned revision) |
+| AI/ML model weights (safetensors/GGUF) | ML-BOM (CycloneDX) — not Dependency-Track | Hub advisory watch + revision-drift recheck | MalwareBazaar + YARA + hub-revision-drift | Nexus tags + Model registry + CMDB | CMDB (pinned revision) |
+| AI/ML model checkpoints (legacy pickle, exception path) | ML-BOM (CycloneDX) — not Dependency-Track | Hub advisory watch + revision-drift recheck | MalwareBazaar + YARA + pickle re-scan + hub-revision-drift — highest priority | Nexus tags + Model registry + CMDB | CMDB (pinned revision) |
+| LoRA / adapter weights | ML-BOM (CycloneDX) — not Dependency-Track | Hub advisory watch + revision-drift recheck | MalwareBazaar + YARA + hub-revision-drift | Nexus tags + Model registry + CMDB | CMDB (pinned revision) |
+
+Rows listing "Dependency-Track where-used" under Deployment tracking are shorthand for build-time/BOM-relationship scoping (which project's release manifest references this component) — that tells you which project teams to notify, not which runtime hosts currently have the component installed. Pair it with CMDB, EDR, or container/orchestration telemetry when the recall workflow needs confirmed deployed-instance identification rather than project-relationship scoping.
 
 Additional policy guidance per type:
 
@@ -654,13 +719,13 @@ Additional policy guidance per type:
 
 **Commercial ISV software:** Create a CMDB entry before promotion including the expected Authenticode thumbprint for that vendor. Subscribe to the vendor's security advisory programme and record the subscription reference in the CMDB. Run Stage 11b recheck weekly minimum.
 
-**Firmware and drivers:** Require private CAPE detonation. Apply the 30-day Tier 1 cooling-off unless the vendor marks the release as a critical security fix. Apply strictest egress controls — firmware source domains must be individually allowlisted.
+**Firmware and drivers:** Require the profile-appropriate private analysis from the Stage 6 table — firmware extraction/static inspection plus QEMU/FirmAE emulation or test hardware where feasible, and isolated test VM/hardware plus static driver analysis for kernel-mode drivers; CAPE's Windows user-mode guest does not exercise either case. Apply the 30-day Tier 1 cooling-off unless the vendor marks the release as a critical security fix. Apply strictest egress controls — firmware source domains must be individually allowlisted.
 
 **Container base images:** Require SBOM generation at the layer level. Re-scan automatically when the upstream digest changes. Full Dependency-Track coverage.
 
 **Internal or vendored packages:** Must be distinguished from public registry packages at the proxy layer to prevent dependency-confusion attacks. Never fetched from a public registry.
 
-**AI/ML model artifacts:** Require `safetensors` or GGUF format by default; legacy pickle checkpoints require a signed exception and a passing static opcode scan. Pin to an exact hub commit SHA, never a mutable branch or tag. Apply the 30-day Tier 1 cooling-off on first intake of a new model family. Recheck the pinned revision against current hub HEAD in every Stage 11b run to detect silent upstream repoint. Legacy-pickle exception artifacts get the highest Stage 11b recheck priority alongside developer toolchain components, since the residual risk after intake is structurally similar — arbitrary code execution on load.
+**AI/ML model artifacts:** Require `safetensors` or GGUF format by default; legacy pickle checkpoints require a signed exception and a passing static opcode scan. Pin to an exact hub commit SHA, never a mutable branch or tag. Generate a CycloneDX ML-BOM at intake — do not treat models as having no capturable provenance data just because Dependency-Track's SBOM/CVE model doesn't fit them. Apply the 30-day Tier 1 cooling-off on first intake of a new model family. Recheck the pinned revision against current hub HEAD in every Stage 11b run to detect mutable-source-reference drift. Legacy-pickle exception artifacts get the highest Stage 11b recheck priority alongside developer toolchain components, since the residual risk after intake is structurally similar — arbitrary code execution on load.
 
 ---
 
@@ -670,11 +735,12 @@ The controls above resolve most of the gaps identified against v1.4, but the fol
 
 ### 1. Stage 11b coverage at scale — when does the paid VirusTotal tier become mandatory?
 
-VirusTotal's free tier caps at 500 hash lookups/day. The rate-limit budgeting in Stage 11b keeps this from failing silently, but a rotation schedule is a mitigation, not a fix — as the inventory grows, Tier 2/3 artifacts get rechecked less often by design.
+VirusTotal's free (Public) API caps at 500 hash lookups/day and its terms restrict use in commercial or automated business workflows — this architecture currently runs it that way anyway for both Stage 6 intake and Stage 11b recheck. This is not a one-time capacity question: Stage 11b rechecks the *entire* approved inventory on a recurring schedule, so every artifact this pipeline ever promotes becomes a permanent, compounding line item against the daily budget. The rate-limit budgeting logic in Stage 11b keeps a fixed inventory from failing silently, but it does not stop the underlying problem — inventory only grows over the life of this program, so the free tier is a shrinking allowance against a growing workload, not a stable one. The ToS restriction is a separate, non-rate-limit reason a commercial licence is likely to become necessary regardless of volume.
 
 - **Option A:** Set a fixed inventory-size threshold (e.g. 2,000 approved artifacts) that triggers automatic budget approval for the VT paid tier, decided now so it isn't a surprise procurement request later.
-- **Option B:** Accept degraded Tier 2/3 recheck frequency indefinitely and rely on MalwareBazaar (no meaningful rate limit) plus YARA re-scan as the primary Stage 11b signal for lower tiers, treating VT as a Tier 1-only control.
-- **Option C:** Replace VT with a commercial threat-intel feed (ReversingLabs TitaniumCloud, Recorded Future) sized for bulk queries from the start, avoiding the free-tier ceiling entirely at higher fixed cost.
+- **Option B:** Accept degraded Tier 2/3 recheck frequency indefinitely and rely on MalwareBazaar (no meaningful rate limit) plus YARA re-scan as the primary Stage 11b signal for lower tiers, treating VT as a Tier 1-only control. This does not resolve the ToS question on its own.
+- **Option C:** Replace VT with a commercial threat-intel feed (ReversingLabs TitaniumCloud, Recorded Future, or VirusTotal Premium) sized for bulk queries from the start, avoiding both the free-tier ceiling and the commercial-use restriction at higher fixed cost.
+- **Option D:** Get a legal/procurement read on whether current usage already violates the Public API terms, independent of the rate-limit question — if so, this may need resolving sooner than the rate limit forces it.
 
 ### 2. Push remediation — how far does automated recall reach?
 
@@ -713,6 +779,16 @@ Phase 6 of the tooling guide calls for tuning YARA rules and Grype thresholds "t
 - **Option A:** Assign alert-tuning as a standing responsibility of a named role (e.g. the security architecture team lead) with a monthly review of Stage 11b false-positive rates.
 - **Option B:** Track false-positive suppression counts (now recorded per the recheck datastore disposition field) as a formal metric with a target ceiling, reviewed at the same cadence as the CMDB quarterly review.
 
+### 7. Structural documentation improvements — deferred, not scheduled
+
+The independent review of this architecture (see `architecture-tooling-review.md`) recommended three structural changes that are each a legitimate improvement in isolation, but represent a meaningfully larger investment than a documentation correction — each is a design/process decision on its own, not a fix to fold in silently. They are logged here as tracked future work rather than actioned in this revision, so the decision to invest in them (or not) is made deliberately rather than by default.
+
+**7a. Normative control catalogue and traceability matrix.** Introduce stable control IDs (`INTAKE-*`, `FETCH-*`, `AUTH-*`, `ANALYSIS-*`, `PROMOTE-*`, `CONSUME-*`, `MONITOR-*`, `RECALL-*`, `PLATFORM-*`) and RFC-style requirement language (MUST/SHOULD/MAY), with each control mapped to threat, owner, implementation, evidence, failure mode, metric, and test. This would make the architecture audit-ready in a way prose control descriptions are not, at the cost of authoring and maintaining a much larger, more rigid document. Decide whether this repository's purpose (internal reference architecture vs. a document that must pass external audit or compliance review) justifies that cost before starting it — it is a poor fit to retrofit incrementally.
+
+**7b. Formal artifact lifecycle state machine.** Define explicit states (`REQUESTED → APPROVED_TO_FETCH → ACQUIRED → ANALYSING → INCONCLUSIVE/REJECTED/COOLING → TESTED → APPROVED → SUSPENDED/RECALLED → EXPIRED`), who can perform each transition, required evidence per transition, idempotency and retry behaviour, and how state reconciles across the portal, evidence database, repository, and CMDB — rather than treating Nexus repository groups as a de facto state machine, which they were never designed to fully represent. This is worth doing once the evidence database (see "Repository Firewall vs. the enterprise intake evidence store," Stage 3) is actually being implemented, since the state machine and the evidence schema are naturally designed together.
+
+**7c. Architecture Decision Records (ADRs) in place of inline "open issues."** This section itself — free-text options embedded in the architecture document — is a reasonable starting point but doesn't scale well: it conflates the currently-open questions with the document's normative content, and doesn't leave a clean audit trail of *which* option was chosen and why once a decision is made. Moving to a standard ADR format (one file per decision, status/context/decision/consequences) would separate "what we decided" from "what the architecture currently says," and is a natural companion to control catalogue work (7a) if that is pursued. Until adopted, this "Open issues for internal review" section remains the mechanism for tracking undecided questions — decisions made against it should be recorded back into this section (or migrated to an ADR) rather than left implicit in a future document edit.
+
 ---
 
 ## Prompt to recreate this document
@@ -728,7 +804,8 @@ Requirements:
   vendor-advisory path, (3) AI/ML model artifact path built around serialization-format safety and
   hub revision pinning instead of SBOM or code signing, (4) post-approval supply chain compromise
   detection via retroactive recheck, and (5) integrity of the pipeline tooling itself. Explain why
-  SBOM tools like Dependency-Track cannot detect trojanised binaries or repointed model weights with
+  SBOM tools like Dependency-Track cannot detect trojanised binaries, or model weights resolved through
+  a drifted mutable source reference, with
   correct version strings, and why pickle-based model checkpoints are a code-execution risk at
   deserialization time rather than a signature-verification problem.
 - High-level flowchart Mermaid diagram showing a three-way path split at Stage 4 (4a/4b/4c), path

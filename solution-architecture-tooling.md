@@ -32,7 +32,7 @@
 > - Stages 4a/5a/11a: Open-source SBOM path — Syft, Grype, Dependency-Track.
 > - Stages 4b/5b: Proprietary binary vendor-advisory path — sha256sum, platform signature verification (Authenticode/GPG as baseline, codesign as optional), NSRL, vendor advisory scripts, CMDB.
 > - Stages 4c/5c: AI/ML model artifact path — hub revision pinning, `safetensors`/GGUF format enforcement, pickle static-scan exception handling, model card capture, CMDB/model registry.
-> - Stage 6 and 11b: Binary recheck for all artifact types — ClamAV, YARA, MalwareBazaar, VirusTotal hash API, NSRL, CAPE sandbox or model load-test sandbox. This stage addresses supply chain attacks where a trojanised binary or repointed model has a correct version string and no published CVE — a class of threat invisible to SBOM-based tools.
+> - Stage 6 and 11b: Binary recheck for all artifact types — ClamAV, YARA, MalwareBazaar, VirusTotal hash API, NSRL, CAPE sandbox or model load-test sandbox. This stage addresses supply chain attacks where a trojanised binary, or a model resolved through a drifted mutable source reference, has a correct version string and no published CVE — a class of threat invisible to SBOM-based tools.
 >
 > A fifth, cross-cutting concern — the integrity of the scanning tooling itself — is addressed under "Pipeline tooling supply chain" rather than folded into any single stage.
 
@@ -50,8 +50,8 @@
 | 4c · Integrity — AI/ML model | huggingface_hub API (revision pinning) + fickling / picklescan + safetensors validator | Nexus component hash attributes | — |
 | 5a · SBOM and SCA — open source | Syft + Grype + Dependency-Track | Sonatype Lifecycle (IQ Server) | FOSSA, Anchore Enterprise |
 | 5b · Vendor advisory — proprietary | Custom pipeline script + Nexus tags + CMDB | Nexus Pro custom metadata API | ServiceNow CMDB integration |
-| 5c · Model card and license capture — AI/ML | Custom pipeline script + Nexus tags + CMDB/model registry | Nexus Pro custom metadata API | MLflow Model Registry |
-| 6 · Malware and sandbox | ClamAV + YARA + MalwareBazaar + NSRL + CAPE Sandbox + model load-test harness | Nexus IQ malware intelligence | Recorded Future Sandbox, ANY.RUN |
+| 5c · ML-BOM and model card capture — AI/ML | cyclonedx-python-lib (ML-BOM) + custom pipeline script + evidence DB + CMDB/model registry | Nexus Pro custom metadata API | MLflow Model Registry |
+| 6 · Malware and sandbox | ClamAV + YARA + MalwareBazaar + NSRL, plus per-platform profile: CAPE (Windows), disposable syscall-monitored Linux VM/gVisor, binwalk/QEMU (firmware), model load-test harness | Nexus IQ malware intelligence | Recorded Future Sandbox, ANY.RUN (Windows-scope only) |
 | 7 · Cooling-off delay | Custom Jenkins/GitLab pipeline gate | IQ Server policy age rules | — |
 | 8 · Test pipeline | Jenkins or GitLab CI, isolated runners | — | GitHub Actions (private runners) |
 | 9 · Promotion review | GitLab MR approvals or Jenkins gates | IQ Server promotion workflows | — |
@@ -61,6 +61,23 @@
 | 11a · CVE recheck — AI/ML model | Hub API revision-drift poll + model-card watch | — | — |
 | 11b · Binary recheck — all types | Scheduled job: VT hash API + MalwareBazaar + YARA + NSRL + platform signature OCSP/revocation + CAPE on IOC + model hub-revision drift; rate-limit budgeted, false-positive suppression aware | — | ReversingLabs TitaniumCloud, Recorded Future |
 | Pipeline tooling trust root | Pinned tool versions + cosign signature verification on updates + canary-sample self-audit job | — | — |
+
+---
+
+## Licensing and edition decision matrix
+
+This document's "self-hosted free" framing is a starting point, not a guarantee that every mandatory control in the architecture is enforceable on a free/community-edition tier. Several tools recommended below have a free edition that covers day-to-day use but omits the specific feature this architecture treats as a *mandatory* control — most importantly, GitLab CE does not actually enforce the required-approval promotion gate the architecture depends on. Before procurement, walk every row below and confirm which side of the line the organisation is choosing to stand on, deliberately rather than by default.
+
+**Decision framework:** for each tool, ask (1) does the free/CE tier fully implement every *mandatory* control this architecture assigns to it, not just the workflow in general; (2) if not, is there a free/CE-native workaround (e.g., a scripted gate) that closes the gap without a licence; (3) if the workaround is itself a meaningful engineering investment, is that investment cheaper than the licence over the planning horizon; (4) does the paid tier unlock capabilities (HA, SSO federation, staging, vulnerability intelligence) that this architecture will need regardless of the specific control gap. Licence terms and feature boundaries change — verify current feature-tier placement against the vendor's own documentation before final procurement, don't rely on this table's specifics as of any date after publication.
+
+| Tool | Free / CE tier limitation relevant to this architecture | What the paid tier unlocks | Recommendation |
+|---|---|---|---|
+| **GitLab CE** (request portal, promotion gate) | Merge request approvals are optional and advisory — CE does not block a merge for missing approvals, does not prevent an author approving their own change, and does not reset approvals on new commits. This architecture's Stage 9 promotion gate and segregation-of-duties requirement are **not enforced** on CE as literally described. | GitLab Premium/Ultimate adds required approval rules, protected-branch approval enforcement, prevention of author self-approval, and approval reset after new commits — a native, vendor-supported enforcement path. | Choose one deliberately: (a) licence Premium/Ultimate and configure required approvals as a true gate, or (b) stay on CE and replace "GitLab MR approval" with a protected-branch CI status check that calls an external approval-record service and only allows a restricted service account to merge after it passes (see Stage 9 and control C1-equivalent fix below). Do not describe native CE approvals as a production control either way. |
+| **Nexus Repository** (quarantine repo, approved repos) | Nexus Repository OSS covers basic hosted/proxy/group repositories but lacks staging workflows, several blob store and HA options, and enterprise identity integration that this architecture's Stage 3/9/10 promotion and replication requirements assume. Exact feature boundaries between OSS and Pro should be verified against Sonatype's current edition comparison, not assumed from this table. | Nexus Repository Pro adds staging repositories, additional blob store backends, LDAP/SAML integration, and HA clustering. | Nexus Pro is effectively required for this architecture's promotion-state and HA requirements regardless of the quarantine question below — budget for it as a baseline cost, not an optional upgrade. |
+| **Sonatype Repository Firewall** (component quarantine and intelligence) | Not included with Nexus Repository Pro. Repository Firewall is a separately licensed capability (via IQ Server) that quarantines components fetched through *proxy* repositories against Sonatype's component intelligence. It does not, by itself, provide a generic immutable evidence store for arbitrary installers, firmware, or model files that don't come through an ecosystem proxy — see "Repository Firewall vs. the enterprise intake evidence store" below. | Automated quarantine-on-fetch and component risk intelligence for proxied open-source ecosystems. | Licence Repository Firewall only if automated proxy-layer quarantine for open-source ecosystems is in scope; it is not a substitute for, and should not be budgeted as covering, the custom intake evidence store this architecture needs for proprietary/firmware/model artifacts. |
+| **VirusTotal** (hash reputation lookups) | Public API: 500 lookups/day, and its terms restrict commercial/automated business-workflow use — see the VirusTotal-specific caveats above and in "Open issues for internal review." | Premium API: higher/bulk rate limits, licensed for commercial automation. | Budget for Premium once inventory growth or the ToS question forces the issue — track both triggers, not just the rate limit. |
+| **CAPE Sandbox** | Free/GPL and self-hosted, but it detonates samples inside Windows guest VMs — those guest OS licences are a real, easy-to-miss cost that "free tooling" framing can obscure. Confirm Windows guest licensing (volume licensing, MSDN/Visual Studio subscription, or equivalent) is budgeted before treating CAPE as a zero-cost control. | N/A — CAPE itself has no paid tier; commercial sandboxes (ANY.RUN, Joe Sandbox) are the paid alternative, priced to include guest OS licensing. | Budget Windows guest OS licensing explicitly alongside CAPE infrastructure costs; do not list CAPE as "free" without that caveat. |
+| **OWASP Dependency-Track** | Fully free (Apache 2.0) at every tier; no feature gate relevant to this architecture. | Sonatype Lifecycle is the commercial alternative, not a paid tier of Dependency-Track — it replaces rather than upgrades it. | No licensing decision needed unless evaluating Sonatype Lifecycle as a full replacement for Syft + Grype + Dependency-Track. |
 
 ---
 
@@ -94,6 +111,23 @@ For proprietary binary downloads, allowlist specific vendor domains individually
 
 Dependency-confusion prevention for open-source: allowlist required upstream registry domains; block requests where URL path matches an internal namespace directed at a public registry; log all denied requests to OpenSearch.
 
+### SSRF hardening
+
+A domain allowlist alone does not stop an allowlisted domain from redirecting to an internal address, or a hostname resolving to an internal IP at fetch time (DNS rebinding) even though it resolved externally when the domain was allowlisted. This proxy is a server-side fetcher acting on requestor-supplied URLs — treat it as an SSRF-relevant component and add these controls on top of the domain allowlist:
+
+```
+# Squid ACLs — block RFC1918/link-local/loopback/metadata-service destinations
+# regardless of the requested hostname, so a rebound or redirected DNS answer
+# can't route the fetch to an internal target.
+acl internal_dst dst 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 127.0.0.0/8 169.254.0.0/16
+http_access deny internal_dst
+
+# Cap redirects and enforce TLS verification
+follow_x_forwarded_for deny all
+```
+
+Squid's ACLs operate on resolved destination IPs per-request, which covers the DNS-rebinding case as long as `internal_dst` is evaluated on every hop of a redirect chain, not only the initial request — verify this against the deployed Squid version's redirect-handling behaviour, since default configurations vary. Where stronger guarantees are needed, front the actual download with a small custom fetch service (rather than relying on Squid alone) that: resolves the hostname, validates the resolved IP against the same internal-range denylist, connects directly to that validated IP while still presenting the original hostname for TLS SNI/hostname verification (preventing a rebind between validation and connection), and re-validates on every redirect hop rather than only the initial URL. Log DNS resolution, TLS certificate details, the full redirect chain, and response headers as acquisition evidence for every fetch, not just the final destination.
+
 **Complementary:** iptables or nftables on all endpoints blocking direct outbound TCP 443 and TCP 80 except to the Squid proxy IP.
 
 **Alternative:** OPNsense (BSD, free) with built-in Squid proxy.
@@ -104,14 +138,22 @@ Dependency-confusion prevention for open-source: allowlist required upstream reg
 
 ## Stage 3 · Quarantine repository
 
-**Nexus Repository Pro** with the Firewall Audit and Quarantine capability enabled per proxy repository.
+**Two separately licensed capabilities are in play here, and one product does not automatically provide both:**
 
-The SHA-256 hash stored as a component attribute in Nexus is the primary key used by the Stage 11b retroactive recheck job to query VirusTotal, MalwareBazaar, and NSRL. It is critical that hashes are stored as searchable component attributes, not only as file checksums, so the recheck job can retrieve them in bulk via the Nexus REST API without downloading every binary.
+**Sonatype Repository Firewall** (via IQ Server, licensed separately from Nexus Repository Pro — see the licensing matrix above) quarantines components requested through *proxy* repositories (npm, PyPI, Maven, apt/yum) against Sonatype's component intelligence. It covers Path A's ecosystem-proxied artifacts. It does not provide a generic quarantine/evidence capability for proprietary binaries, firmware, or model files fetched as raw/hosted downloads rather than through an ecosystem proxy — those need capability 2 below regardless of whether Repository Firewall is licensed.
+
+**Nexus Repository Pro hosted/raw repositories** provide the immutable intake evidence store used by every artifact type, including everything Repository Firewall's proxy-layer quarantine doesn't reach. This is the capability the rest of this section, and the SHA-256 indexing requirement below, describes.
+
+The SHA-256 hash stored as a component attribute in Nexus is the primary key used by the Stage 11b retroactive recheck job to query VirusTotal, MalwareBazaar, and NSRL. It is critical that hashes are stored as searchable component attributes, not only as file checksums, so the recheck job can retrieve them in bulk via the Nexus REST API without downloading every binary. Reserve Nexus tags for compact lookup/lifecycle values only — see "Per-artifact evidence database" below for where the full provenance record lives.
 
 Lifecycle repository groups:
 - `intake-quarantine` — initial staging, no consumer access.
 - `intake-dev-approved` — cleared for development use.
 - `intake-prod-approved` — cleared for production use.
+
+### Per-artifact evidence database
+
+Nexus's Tags API applies compact key-value tags at the **component** level — it is not a strongly typed per-asset database, and one Nexus component can contain multiple assets (a Maven component's jar/pom/sources, a multi-arch container image's per-platform manifests). Do not model the full provenance record — requestor, approver, every scan verdict, every recheck-history entry — as ad hoc Nexus tags invented per pipeline script. Stand up a separate evidence database (a PostgreSQL schema is sufficient) keyed by repository, format, component coordinates, asset path, and SHA-256, and treat it as the authoritative store for everything except the small set of compact tags (`intake-ticket-ref`, `lifecycle-state`, `risk-tier`, and similar) that Nexus tags are actually suited for. Define this schema once, formally, rather than letting each pipeline stage's script invent its own tag names — the examples elsewhere in this document showing `PUT .../components/{id}/tags` with rich JSON payloads are illustrative of *what* to capture, not a literal recommended implementation against Nexus's real Tags API; validate the real call shape against the Swagger specification generated by the deployed Nexus instance before implementing.
 
 ---
 
@@ -171,30 +213,39 @@ fi
 spctl --assess --type execute --verbose "$artifactPath"
 ```
 
-**Package and binary signature verification (Linux):** RPM/DEB packages use their native signature verification against an imported publisher public key; standalone ELF binaries or tarballs are verified with a detached GPG signature where the vendor provides one.
+**Package and binary signature verification (Linux):** the correct mechanism depends on how the artifact was obtained, not one universal Linux tool. RPM packages carry their own embedded signature. DEB packages fetched through a repository are trusted via the repository's signed `InRelease`/`Release.gpg` metadata — most individual DEB packages are not signed with `dpkg-sig` at all, so treat that as the exception path for standalone vendor `.deb` downloads that happen to be signed that way, not the default. Standalone ELF binaries or tarballs are verified with a detached GPG signature where the vendor provides one.
 
 ```bash
-# Import the publisher's public key once, then verify per artifact
+# RPM: the package's own embedded signature
 rpm --checksig vendor-package.rpm
+
+# APT repository metadata — the actual trust root for repo-installed DEB packages
+gpg --verify InRelease  # or the modern keyring-based apt verification equivalent
+
+# Standalone DEB (uncommon to be signed this way — check for a detached GPG
+# signature instead if dpkg-sig verification isn't applicable)
 dpkg-sig --verify vendor-package.deb
+
+# Standalone ELF binary or tarball distributed with a detached GPG signature
 gpg --verify vendor-binary.tar.gz.sig vendor-binary.tar.gz
 ```
 
-**NSRL positive-assertion lookup (Stage 4b):** Load the NIST NSRL dataset into a local PostgreSQL database and query it as part of the pipeline. A match provides positive confirmation that the hash corresponds to a known legitimate release. Absence from NSRL is not a block — niche or internal tools may not be indexed — but the result is recorded in Nexus metadata.
+**NSRL reference-corpus lookup (Stage 4b):** NIST distributes the current NSRL Reference Data Set as RDSv3 SQLite files. Query the SQLite file directly, or ETL it into a shared PostgreSQL instance via a documented, versioned import job if consolidating with other reference data — verify the exact table/column names against the RDSv3 schema documentation for the release in use, since it has changed across NSRL versions. A match is evidence supporting identification and provenance, not proof the file is currently safe — treat it the same as any other reference-corpus hit, not a security clearance. Absence from NSRL is not a block — niche or internal tools may not be indexed — and the result (including the dataset version used) is recorded in Nexus metadata regardless of outcome.
 
 ```python
-def check_nsrl(sha256_hash: str, nsrl_db) -> dict:
+def check_nsrl(sha256_hash: str, nsrl_db, dataset_version: str) -> dict:
+    # Table/column names must be verified against the current RDSv3 schema — illustrative only.
     cursor = nsrl_db.execute(
-        "SELECT FileName, ProductName, ProductVersion FROM NSRLFile WHERE SHA256 = ?",
+        "SELECT file_name, product_name, product_version FROM file_entry WHERE sha256 = ?",
         (sha256_hash.upper(),)
     )
     row = cursor.fetchone()
     if row:
-        return {"known_good": True, "product": row[1], "version": row[2]}
-    return {"known_good": False}
+        return {"status": "present_in_nsrl", "product": row[1], "version": row[2], "dataset_version": dataset_version}
+    return {"status": "not_present", "dataset_version": dataset_version}
 ```
 
-**Vendor catalog integration scripts:** Python scripts that query the Microsoft Update Catalog API or vendor download manifests to retrieve the expected hash for a given KB number or product version.
+**Vendor catalog integration scripts:** the Microsoft Update Catalog does not expose a documented, supported public REST API — do not build this integration by scraping the Catalog website. Use the supported channels instead: the **MSRC CVRF/CSAF API** for machine-readable advisory data (CVEs addressed, severity, affected products) keyed by KB number, and **WSUS's own catalog synchronisation** (via the WSUS API or PowerShell `Get-WsusUpdate`/`Approve-WsusUpdate` cmdlets) to resolve and import a specific Update ID — WSUS, not this pipeline, is the system that actually fetches and validates update content from Microsoft. For non-Microsoft vendors, use whatever documented vendor interface exists (a published manifest, advisory feed, or partner API); if none exists, capture the hash from the vendor's published download page manually as part of the intake ticket rather than scripting fragile scraping against an unsupported page.
 
 ---
 
@@ -262,12 +313,53 @@ grype sbom:artifact-sbom.json --output json > grype-results.json
 
 **OWASP Dependency-Track** (Apache 2.0): continuous SBOM management and CVE monitoring platform. Minimum 8 GB RAM. Provides portfolio-wide visibility, where-used analysis, policy enforcement, and notifications. Used only for artifacts that have a meaningful SBOM.
 
-```bash
-docker pull dependencytrack/bundled
-docker volume create --name dependency-track
-docker run -d -m 8192m -p 8080:8080 --name dependency-track \
-  -v dependency-track:/data dependencytrack/bundled
+**Deployment note:** Dependency-Track 5.x is container-only (no WAR/executable-JAR distribution) and requires an external PostgreSQL 14+ database — the legacy `dependencytrack/bundled` single-container image with an embedded database is a 4.x-era pattern and is not the supported 5.x architecture. Deploy the API server and frontend as separate pinned-version containers against an externally managed Postgres instance, and follow Dependency-Track's documented migration procedure when upgrading between major versions:
+
+```yaml
+# docker-compose.yml — pinned Dependency-Track 5.x, separate API server/frontend, external Postgres
+services:
+  dtrack-postgres:
+    image: postgres:16.4
+    environment:
+      POSTGRES_DB: dtrack
+      POSTGRES_USER: dtrack
+      POSTGRES_PASSWORD_FILE: /run/secrets/dtrack_db_password
+    volumes:
+      - dtrack-postgres-data:/var/lib/postgresql/data
+    secrets:
+      - dtrack_db_password
+
+  dtrack-apiserver:
+    image: dependencytrack/apiserver:5.6.0
+    depends_on:
+      - dtrack-postgres
+    environment:
+      ALPINE_DATABASE_MODE: external
+      ALPINE_DATABASE_URL: jdbc:postgresql://dtrack-postgres:5432/dtrack
+      ALPINE_DATABASE_USERNAME: dtrack
+      ALPINE_DATABASE_PASSWORD_FILE: /run/secrets/dtrack_db_password
+    volumes:
+      - dtrack-apiserver-data:/data
+    secrets:
+      - dtrack_db_password
+
+  dtrack-frontend:
+    image: dependencytrack/frontend:5.6.0
+    depends_on:
+      - dtrack-apiserver
+    ports:
+      - "8080:8080"
+
+secrets:
+  dtrack_db_password:
+    file: ./dtrack_db_password.txt
+
+volumes:
+  dtrack-postgres-data:
+  dtrack-apiserver-data:
 ```
+
+Pin the `postgres`, `apiserver`, and `frontend` image tags to specific tested versions (or digests, per the pipeline-tooling pinning practice above), maintain a documented backup and migration procedure for the Postgres volume, and route version upgrades through the same tool-intake/approval control as any other pipeline dependency change.
 
 **License analysis:** Grant (Anchore, Apache 2.0), FOSSology (GPL, self-hosted), or FOSSA (paid).
 
@@ -279,33 +371,31 @@ When Sonatype Lifecycle (IQ Server) is licensed, it handles SBOM generation, SCA
 
 ## Stage 5b · Vendor advisory capture — proprietary binary path
 
-There is no SBOM tool for this path. A custom pipeline script captures structured vendor advisory metadata and stores it in Nexus and the CMDB.
+Syft-class tools cannot generate SBOM data from a closed-source binary, but that doesn't mean zero component data is ever available — accept a vendor-published SBOM where one exists (an increasingly common vendor practice under regulatory/procurement pressure), and where binary composition analysis can technically extract a partial inventory (e.g., detecting statically linked open-source libraries), capture it labeled as partial rather than dropping it. Record `coverage`, `generator`, `source`, and `confidence` fields on any such record so it's never presented as more complete than it is. A custom pipeline script captures this alongside structured vendor advisory metadata and stores the full record in the evidence database, the CMDB, and a compact pointer in Nexus.
 
 ### Pipeline script responsibilities
 
 1. Read artifact type and vendor reference (KB number, product version) from the GitLab intake ticket.
 2. Query the vendor advisory source — Microsoft MSRC API, vendor release notes — to retrieve CVEs addressed, vendor severity, and affected product scope.
-3. Structure data as a JSON advisory record.
-4. Write summary fields as Nexus component metadata tags: `advisory.kb_number`, `advisory.cves`, `advisory.vendor_severity`, `advisory.vendor_name`.
-5. Write the Authenticode thumbprint verification result and the NSRL result as additional Nexus tags.
-6. Attach the full advisory JSON to the artifact in Nexus.
-7. Create or update the CMDB entry, including the expected Authenticode thumbprint for this publisher.
+3. Structure data as a JSON advisory record; write it to the evidence database (see "Per-artifact evidence database" under Stage 3), keyed by Nexus component coordinates and SHA-256.
+4. Write a small number of compact Nexus tags for search/lifecycle purposes only — e.g. `advisory-kb`, `lifecycle-state` — not the full advisory record.
+5. Attach the full advisory JSON to the artifact in Nexus as well, for convenience, but treat the evidence database as authoritative.
+6. Create or update the CMDB entry, including the expected Authenticode thumbprint for this publisher.
 
-### Nexus Pro custom metadata API
+### Illustrative Nexus tag example — validate against the deployed instance's Swagger spec
+
+The example below is illustrative of *which fields* matter, not a literal recommended call — verify the actual request shape against the Tags API exposed by the Nexus Swagger UI (`/service/rest/swagger.json`) on the deployed instance, since the Tags API applies at component level and its exact schema can vary by Nexus version. Keep the tag payload itself compact; put the rich, per-field record (CVE list, full advisory text, per-signal recheck results) in the evidence database instead.
 
 ```bash
 curl -u user:pass -X PUT \
   "https://nexus.internal/service/rest/v1/components/{id}/tags" \
   -H "Content-Type: application/json" \
   -d '{
-    "advisory.kb_number":"KB5034441",
-    "advisory.cves":"CVE-2024-21338,CVE-2024-21345",
-    "advisory.vendor_severity":"Critical",
-    "auth.authenticode_status":"Valid",
-    "auth.cert_thumbprint_match":"true",
-    "auth.nsrl_result":"known_good",
-    "auth.malwarebazaar_result":"not_found"
+    "advisory-kb": "KB5034441",
+    "lifecycle-state": "intake-quarantine"
   }'
+# Full record — CVE list, vendor severity, Authenticode/NSRL/MalwareBazaar results —
+# goes to the evidence database keyed by component coordinates + SHA-256, not here.
 ```
 
 ### CMDB tooling options
@@ -322,36 +412,64 @@ The minimum CMDB record for a proprietary artifact: artifact name and version, N
 
 ---
 
-## Stage 5c · Model card and license capture — AI/ML model path
+## Stage 5c · ML-BOM and model card capture — AI/ML model path
 
-There is no SBOM tool for model artifacts. A custom pipeline script captures model card, license, and lineage metadata, mirroring the Stage 5b pattern for proprietary binaries.
+Dependency-Track's SBOM/CVE model doesn't fit model weights, but that does not mean models have no capturable provenance data — CycloneDX defines an **ML-BOM** extension specifically for this. A custom pipeline script generates the ML-BOM and captures model card, license, and lineage metadata, mirroring the Stage 5b pattern for proprietary binaries.
+
+### CycloneDX ML-BOM generation
+
+CycloneDX's Python library supports authoring ML-BOM components directly; there is no single off-the-shelf "Syft for models" yet, so the pipeline script constructs the ML-BOM from the same data it already collects at Stage 4c/5c:
+
+```python
+from cyclonedx.model.bom import Bom
+from cyclonedx.model.component import Component, ComponentType
+from cyclonedx.model.license import License, LicenseExpression
+from cyclonedx.output.json import JsonV1Dot6
+
+def build_model_mlbom(model_repo_id: str, pinned_sha: str, sha256: str,
+                       license_id: str, base_model: str | None) -> str:
+    bom = Bom()
+    component = Component(
+        name=model_repo_id.split("/")[-1],
+        type=ComponentType.MACHINE_LEARNING_MODEL,
+        version=pinned_sha[:12],
+        licenses=[License(license=LicenseExpression(license_id))],
+    )
+    # model_card, datasets, and base-model lineage fields use CycloneDX's
+    # modelCard structure — see the CycloneDX ML-BOM spec for the full schema.
+    bom.metadata.component = component
+    bom.components.add(component)
+    return JsonV1Dot6(bom).output_as_string()
+```
+
+Attach the resulting ML-BOM JSON to the Nexus artifact and the model registry entry. **Do not upload it to Dependency-Track** — Dependency-Track's vulnerability engine correlates PURLs against CVE feeds, and model weights have no equivalent CVE ecosystem to correlate against; an ML-BOM entry there would sit permanently at zero findings and misrepresent coverage the same way an empty SBOM would for a proprietary binary.
 
 ### Pipeline script responsibilities
 
 1. Read the model repo ID and requested reference from the GitLab intake ticket.
 2. Fetch the model card (README/metadata) from the hub API. Parse declared license, base-model lineage (for fine-tunes and adapters), and any declared training data provenance.
 3. Record the hub's verified-organisation status for the publishing namespace.
-4. Structure the model card, license, and lineage data as a JSON record.
-5. Write summary fields as Nexus component metadata tags: `model.hub_repo_id`, `model.pinned_revision`, `model.license`, `model.base_model`, `model.publisher_verified`.
-6. Write the pickle-scan result (Stage 4c) and serialization format as additional Nexus tags.
-7. Attach the full model card JSON to the artifact in Nexus.
+4. Generate the CycloneDX ML-BOM as shown above.
+5. Structure the model card, license, and lineage data as a JSON record; write it to the evidence database keyed by Nexus component coordinates and SHA-256, and to the model registry metadata store.
+6. Write a small number of compact Nexus tags for search/lifecycle purposes only — e.g. `model-pinned-revision`, `lifecycle-state` — not the full model card record.
+7. Attach the full model card JSON and ML-BOM to the artifact in Nexus as well, for convenience, but treat the evidence database / model registry as authoritative.
 8. Create or update the CMDB (or model registry) entry, keyed to the pinned hub revision.
 
-### Nexus Pro custom metadata API
+### Illustrative Nexus tag example — validate against the deployed instance's Swagger spec
+
+As with Stage 5b, verify the actual Tags API call shape against the deployed Nexus instance's own Swagger UI before implementing — this example shows which fields matter, not a literal recommended request:
 
 ```bash
 curl -u user:pass -X PUT \
   "https://nexus.internal/service/rest/v1/components/{id}/tags" \
   -H "Content-Type: application/json" \
   -d '{
-    "model.hub_repo_id":"org/model-name",
-    "model.pinned_revision":"a1b2c3d4e5f6...",
-    "model.license":"apache-2.0",
-    "model.base_model":"org/base-model-name",
-    "model.publisher_verified":"true",
-    "model.serialization_format":"safetensors",
-    "model.pickle_scan_result":"not_applicable"
+    "model-pinned-revision": "a1b2c3d4e5f6...",
+    "lifecycle-state": "intake-quarantine"
   }'
+# Full record — hub repo ID, license, base-model lineage, publisher verification,
+# serialization format, pickle-scan result — goes to the evidence database and
+# model registry, keyed by component coordinates + SHA-256, not here.
 ```
 
 ### License classification note
@@ -383,9 +501,9 @@ def check_malwarebazaar(sha256: str) -> bool:
     return resp.json().get("query_status") == "hash_found"
 ```
 
-**NSRL lookup** (Stage 6 cross-check): record result in Nexus metadata. Not a blocking control on its own — absence from NSRL is not malicious — but a positive match adds confidence.
+**NSRL lookup** (Stage 6 cross-check): record result in Nexus metadata, including the RDSv3 dataset version used. Not a blocking control on its own — absence from NSRL is not malicious, and presence does not certify the file is currently safe — a match is provenance evidence to weigh alongside the other Stage 6 signals, not a standalone confidence booster.
 
-**VirusTotal hash lookup** (free tier: 500 lookups/day; no file submission): safe for all artifact types including proprietary because only the SHA-256 is transmitted. Permitted for open-source at intake; also used in Stage 11b recheck for all artifact types.
+**VirusTotal hash lookup** (Public API, free tier: 500 lookups/day; no file submission): safe for all artifact types including proprietary because only the SHA-256 is transmitted. Used for open-source at intake and in Stage 11b recheck for all artifact types. **Capacity flag:** Stage 11b rechecks the whole approved inventory on a recurring schedule, so the number of hashes competing for this 500/day budget only grows as more artifacts get promoted — this is not a fixed cost. The Public API's terms also restrict use in commercial/automated business workflows, which this pipeline's unattended nightly recheck arguably is, independent of whether the rate limit is ever actually hit. See "Open issues for internal review" below for the procurement/licensing decision this implies.
 
 ```python
 def check_vt_hash(sha256: str, api_key: str) -> int:
@@ -396,43 +514,97 @@ def check_vt_hash(sha256: str, api_key: str) -> int:
     return resp.json()["data"]["attributes"]["last_analysis_stats"]["malicious"]
 ```
 
-### Dynamic sandbox — all proprietary artifact types
+### Dynamic and specialised analysis, by platform profile
 
-**CAPE Sandbox** (GPL): recommended open-source dynamic analysis sandbox. Derived from Cuckoo v1 with automatic payload unpacking, config extraction, and YARA-based classification. Supports Windows 10 and 11 guests.
+Earlier revisions of this guide recommended "mandatory CAPE detonation for all proprietary binaries, drivers, and firmware." CAPE is a Windows-guest sandbox and cannot meaningfully execute Linux packages, firmware images, or kernel-mode drivers — it covers exactly one of the profiles below, not all artifact types. Select tooling by the profile the artifact actually matches, and record a PASS/FAIL/INCONCLUSIVE/UNAVAILABLE outcome for every run (see the architecture document's Stage 6 for the outcome-state definitions and fail-closed rules for INCONCLUSIVE/UNAVAILABLE).
 
-CAPE architecture: Ubuntu LTS host with KVM; Windows 10 or 11 23H2 VMs; REST API for submission and report retrieval; reports attached to Nexus artifact records.
+**Windows user mode (EXE, MSI, DLL, scripts) — CAPE Sandbox** (GPL): recommended open-source dynamic analysis sandbox. Derived from Cuckoo v1 with automatic payload unpacking, config extraction, and YARA-based classification. Supports Windows 10 and 11 guests.
 
-Data handling policy defines: artifacts eligible for CAPE (all proprietary binaries, high-risk open-source); artifacts restricted to private CAPE only (proprietary ISV software); artifacts ineligible for any external sandbox (classified content).
+CAPE architecture: Ubuntu LTS host with KVM; Windows 10 or 11 23H2 VMs (budget the guest OS licence explicitly — see the licensing matrix); REST API for submission and report retrieval; reports attached to Nexus artifact records.
 
-**Paid cloud alternatives:** ANY.RUN (paid tiers for private analysis), Joe Sandbox, Recorded Future Sandbox — only for artifacts cleared for external submission.
+Data handling policy defines: artifacts eligible for CAPE (Windows user-mode proprietary binaries, high-risk open-source); artifacts restricted to private CAPE only (proprietary ISV software); artifacts ineligible for any external sandbox (classified content).
+
+**Paid cloud alternatives (Windows user mode only):** ANY.RUN (paid tiers for private analysis), Joe Sandbox, Recorded Future Sandbox — only for artifacts cleared for external submission.
+
+**Windows kernel mode (drivers)** — CAPE's user-mode guest does not exercise kernel-mode code paths. Use Authenticode/catalog signature verification (already mandatory at Stage 4b), static driver analysis (e.g. checking for known-dangerous IOCTLs or unsigned kernel modules), and an isolated test VM or physical test hardware where the organisation has the capacity to load and exercise the driver safely. Where none of that capacity exists, the profile outcome is **UNAVAILABLE** and the artifact fails closed per the architecture's Stage 6 rule, rather than silently skipping dynamic analysis.
+
+**Linux (ELF, RPM, DEB, shell installers)** — reuse the same disposable, no-egress, syscall-monitored isolation pattern built for model load-testing below, with a Linux-appropriate detonation harness in place of the model loader:
+
+```bash
+# Disposable Linux detonation: no network, syscall/file/process monitoring via auditd
+firejail --net=none --private --seccomp --noroot \
+  auditd-wrapper.sh /tmp/sandbox-run/install-or-execute.sh
+# Alternative: gVisor (runsc) or Kata Containers runtime with a Falco or eBPF-based
+# syscall monitor attached, for stronger isolation than firejail's namespace sandboxing.
+```
+
+Report the same signals as the model load-test harness: child-process spawns, filesystem writes outside the sandboxed working directory, and outbound network attempts, mapped to PASS/FAIL/INCONCLUSIVE.
+
+**Firmware (images, update capsules)** — static extraction and inspection, not full detonation in the general case:
+
+```bash
+# Static firmware extraction and inspection
+binwalk -e firmware_image.bin
+# Inspect extracted filesystem for embedded credentials, known-vulnerable component
+# versions, and unexpected network-facing binaries.
+```
+
+Follow with vendor signature verification (already mandatory at Stage 4b) and, where the organisation has the capacity, QEMU-based emulation (the FirmAE project provides a starting point for automating firmware emulation) or dedicated test hardware to observe boot-time behaviour. Where extraction fails or emulation/test hardware isn't available, record **INCONCLUSIVE** or **UNAVAILABLE** rather than treating a successful static scan alone as a PASS.
+
+**Containers (OCI images)** — Syft/Grype layer and SBOM analysis (Path A tooling) plus a sandboxed runtime behaviour test (run the container in an isolated namespace/network and monitor for unexpected outbound connections or privilege-escalation attempts) before promotion.
 
 ### Isolated load-test sandbox — AI/ML model artifacts
 
 CAPE's Windows-guest design does not fit the model threat model. Instead, the model is loaded inside a disposable, no-egress container with syscall monitoring, and the pipeline asserts that loading did not spawn a child process, write outside the working directory, or attempt an outbound connection.
 
 ```python
-import subprocess, json
+import resource, subprocess
+
+# Hard resource ceilings — a malicious or malformed model file can be a resource-
+# exhaustion vector (decompression bomb, absurd declared tensor shape) independent
+# of whether it also triggers code execution. Tune these to the largest legitimate
+# model this pipeline expects to approve, not to accommodate any submitted file.
+MAX_RSS_BYTES = 32 * 1024**3       # 32 GB RAM ceiling for the load process
+MAX_CPU_SECONDS = 300              # 5 minutes CPU time
+MAX_FILE_BYTES = 100 * 1024**3     # 100 GB max artifact size accepted for load-test
+MAX_ARCHIVE_DEPTH = 3              # reject nested archives beyond this depth
+MAX_COMPRESSION_RATIO = 100        # flag decompressed:compressed ratios beyond this
+
+def _apply_resource_limits():
+    resource.setrlimit(resource.RLIMIT_AS, (MAX_RSS_BYTES, MAX_RSS_BYTES))
+    resource.setrlimit(resource.RLIMIT_CPU, (MAX_CPU_SECONDS, MAX_CPU_SECONDS))
 
 def isolated_model_load_test(model_path: str, loader_script: str) -> dict:
     result = subprocess.run(
         ["firejail", "--net=none", "--private", "--seccomp",
+         "--rlimit-as=" + str(MAX_RSS_BYTES),
+         "--rlimit-cpu=" + str(MAX_CPU_SECONDS),
          "python3", loader_script, model_path],
-        capture_output=True, timeout=120
+        capture_output=True, timeout=MAX_CPU_SECONDS + 30,
+        preexec_fn=_apply_resource_limits,
     )
     syscall_report = parse_seccomp_audit_log()
     return {
         "load_succeeded": result.returncode == 0,
+        "resource_limit_exceeded": result.returncode in (-9, 137),  # SIGKILL from rlimit/OOM
         "child_process_spawned": syscall_report.get("fork_exec_count", 0) > 0,
         "filesystem_writes_outside_workdir": syscall_report.get("oob_writes", []),
         "network_attempts": syscall_report.get("connect_attempts", []),
     }
+
+def check_archive_resource_limits(archive_path: str) -> dict:
+    depth, ratio = inspect_archive_structure(archive_path)  # implementation-specific
+    return {
+        "archive_depth_exceeded": depth > MAX_ARCHIVE_DEPTH,
+        "compression_ratio_exceeded": ratio > MAX_COMPRESSION_RATIO,
+    }
 ```
 
-`firejail` (self-hosted, GPL) or a disposable gVisor/Kata Containers sandbox both work; the requirement is no-egress networking plus syscall auditing, not a specific tool. A Docker container with `--network none` and a seccomp profile logging `execve`/`connect` syscalls is a lighter-weight equivalent if `firejail` is not already in the stack.
+`firejail` (self-hosted, GPL) or a disposable gVisor/Kata Containers sandbox both work; the requirement is no-egress networking, syscall auditing, and enforced resource ceilings, not a specific tool. A Docker container with `--network none`, `--memory`/`--cpus` limits, and a seccomp profile logging `execve`/`connect` syscalls is a lighter-weight equivalent if `firejail` is not already in the stack. Apply the archive-depth and compression-ratio checks before the load-test even starts, as a cheap static pre-filter against decompression bombs.
 
 ### Handling packed, obfuscated, or nested-archive samples
 
-Static scanners cannot always fully unpack a sample — commercial packers/protectors (Themida, VMProtect) on proprietary installers, or model bundles distributed as nested archives. When ClamAV/YARA/Syft cannot complete a full static pass, the pipeline records the result as `inconclusive`, not `clean`, and this status forces mandatory dynamic detonation (CAPE or the model load-test harness) regardless of artifact type or hash reputation — an inconclusive static result removes static scanning as a basis for skipping or de-prioritising sandbox analysis, but does not by itself block promotion.
+Static scanners cannot always fully unpack a sample — commercial packers/protectors (Themida, VMProtect) on proprietary installers, or model bundles distributed as nested archives. When ClamAV/YARA/Syft cannot complete a full static pass, the pipeline records the outcome as **INCONCLUSIVE**, not PASS, and this status forces mandatory profile-appropriate dynamic analysis (CAPE, the Linux detonation harness, firmware emulation, or the model load-test harness, as applicable) regardless of artifact type or hash reputation — an INCONCLUSIVE static result removes static scanning as a basis for skipping or de-prioritising dynamic analysis, but does not by itself block promotion the way a FAIL does.
 
 ---
 
@@ -440,23 +612,31 @@ Static scanners cannot always fully unpack a sample — commercial packers/prote
 
 Syft, Grype, YARA, CAPE, `fickling`/`picklescan`, and the NSRL/MalwareBazaar client code are themselves internet-sourced software that every other stage depends on for a trustworthy verdict. This section is the tooling-level implementation of the trust-root control described in the architecture document.
 
-**Version pinning:** every tool is installed at a pinned version, never `latest`, in the base image or provisioning script.
-
-```dockerfile
-# Pin exact versions in the pipeline base image — do not use :latest
-RUN curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh \
-    | sh -s -- -b /usr/local/bin v1.18.0
-RUN curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh \
-    | sh -s -- -b /usr/local/bin v0.85.0
-```
-
-**Signed-release verification on updates:** Syft and Grype publish cosign-signed releases; the update job verifies the signature before installing a new pinned version.
+**Version pinning and verified installation:** every tool is installed at a pinned version, never `latest`, and **never by piping a remote install script into a shell** — including the trust-root tooling that exists specifically to prevent exactly this class of supply-chain risk. Download the release artifact and its checksum/signature as separate files from the vendor's release infrastructure, verify the signature, verify the checksum, and only then extract and install:
 
 ```bash
+# Verified install — no curl | sh. Download artifact, checksum, and signature
+# as separate files; verify signature and checksum; then extract.
+SYFT_VERSION=1.19.0
+curl -sSfLO "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_amd64.tar.gz"
+curl -sSfLO "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_checksums.txt"
+curl -sSfLO "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_checksums.txt.sig"
+
+# Verify the checksum file's cosign signature before trusting it
 cosign verify-blob --key anchore-cosign.pub \
-  --signature syft_1.19.0_checksums.txt.sig \
-  syft_1.19.0_checksums.txt
+  --signature "syft_${SYFT_VERSION}_checksums.txt.sig" \
+  "syft_${SYFT_VERSION}_checksums.txt"
+
+# Verify the downloaded artifact against the now-trusted checksum file
+sha256sum --check --ignore-missing "syft_${SYFT_VERSION}_checksums.txt"
+
+# Only now extract and install
+tar -xzf "syft_${SYFT_VERSION}_linux_amd64.tar.gz" -C /usr/local/bin syft
 ```
+
+Apply the same download-verify-install pattern to Grype and every other scanner/sandbox dependency. Where a tool does not publish signed releases or checksums, pin to a specific commit hash and diff-review the change before bumping, per the version-pinning requirement above — do not fall back to an unverified pipe-to-shell installer as a convenience.
+
+**Pin by digest, not just version tag:** container base images and GitHub Actions used anywhere in the pipeline (scanner build images, CI runner images, reusable Actions) should be pinned by immutable digest (`image@sha256:...`) or commit SHA rather than a mutable version tag, so a tag being silently repointed upstream can't change what the pipeline actually runs.
 
 **Ruleset staging:** YARA and CAPE community rule feeds (Elastic, VirusTotal community rules) are pulled into a staging directory and diffed before promotion into the production ruleset, so a rule change is reviewable the same way a code change is.
 
@@ -504,9 +684,30 @@ Test steps: pull artifact from quarantine; install in isolated environment; for 
 
 ## Stage 9 · Promotion review
 
-**GitLab CE Merge Request approvals**: MR requires sign-off from security reviewer and named artifact owner.
+**This is the control most affected by the GitLab CE licensing gap described above.** Native GitLab CE merge request approvals are optional and do not block a merge — they cannot be described as a promotion gate as written in earlier revisions of this guide. Choose one enforceable pattern:
 
-For proprietary path the MR description confirms: vendor advisory record complete in Nexus; CMDB entry created including expected Authenticode thumbprint; vendor bulletin subscription reference documented.
+**Option A — GitLab Premium/Ultimate:** configure required approval rules on the promotion merge request, enable "prevent approval by author," and enable "remove approvals on new commits." This is the vendor-supported path and needs no custom tooling.
+
+**Option B — GitLab CE with a scripted enforcement gate:** since CE cannot block on approval state natively, move enforcement into a required CI status check on a protected branch:
+
+```yaml
+# .gitlab-ci.yml — required status check that blocks merge until two independent
+# signed approvals exist in the external approval-record service (not GitLab's
+# own approval widget, which CE does not enforce)
+promotion-gate:
+  stage: gate
+  script:
+    - approvals=$(curl -sf -H "Authorization: Bearer $APPROVAL_SVC_TOKEN" \
+        "$APPROVAL_SVC_URL/artifacts/${CI_MERGE_REQUEST_IID}/approvals")
+    - count=$(echo "$approvals" | jq '[.[] | select(.independent==true and .signature_valid==true)] | length')
+    - if [ "$count" -lt 2 ]; then echo "Need 2 independent signed approvals, have $count"; exit 1; fi
+  rules:
+    - if: '$CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "promotion"'
+```
+
+Protect the `promotion` branch so only a restricted service account (not individual engineers) can merge, and make `promotion-gate` a required status check on that branch. This reproduces the enforcement Premium/Ultimate provides natively, at the cost of building and maintaining the approval-record service and CI check yourself — weigh that engineering cost against a Premium/Ultimate licence per the decision framework above.
+
+For proprietary path the promotion record confirms: vendor advisory record complete in Nexus; CMDB entry created including expected Authenticode thumbprint; vendor bulletin subscription reference documented.
 
 Custom promotion script: verifies approval expiry; copies artifact within Nexus (not a re-download); attaches all metadata; signs promotion record with cosign; triggers CMDB update.
 
@@ -536,11 +737,13 @@ registry=https://nexus.internal/repository/npm-approved/
 deb https://nexus.internal/repository/apt-approved focal main
 ```
 
-Enforce lockfiles and digest pinning. Dependency-Track provides deployment inventory via where-used SBOM analysis.
+Enforce lockfiles and digest pinning. Dependency-Track's where-used analysis identifies which projects and release manifests reference a component — useful for scoping which teams to notify of a CVE — but it is a build/BOM relationship, not a runtime deployment inventory. Pair it with CMDB, EDR, or container/orchestration telemetry when the actual question is "which running systems have this installed right now."
 
 ### Proprietary — Nexus Pro plus CMDB plus WSUS/SCCM/Intune
 
-Nexus stores the approved binary. CMDB holds deployment inventory and the publisher certificate thumbprint register. WSUS, SCCM, or Intune handles deployment and compliance for Microsoft patches.
+**Microsoft patches specifically do not flow "WSUS pulls from Nexus."** That is not a supported Microsoft distribution pattern. The supported flow is: this pipeline's intake workflow approves the Update ID (from the Microsoft Update Catalog) and captures its catalog metadata; independent hash/signature verification happens against the catalog-published values at Stage 4b as already described; and the actual import, approval, and deployment of that Update ID happens **inside WSUS/Configuration Manager/Intune itself**, which fetch the update content directly from Microsoft — not from Nexus. Nexus stores an archival copy and the intake evidence record for audit purposes when policy requires it, but is not in the content-delivery path for Microsoft patches. See "Vendor catalog integration scripts" under Stage 4b and the corrected WSUS import step under Phase 3 below.
+
+For non-Microsoft proprietary software (commercial ISV, drivers, firmware), Nexus does serve as the actual distribution point, and CMDB holds deployment inventory and the publisher signing-identity register.
 
 ### AI/ML model — Nexus Pro plus CMDB/model registry, keyed to pinned revision
 
@@ -606,7 +809,7 @@ curl -u user:pass \
   | jq -r '.items[] | {name: .name, version: .version, sha256: .assets[0].checksum.sha256}'
 ```
 
-**VirusTotal hash API** (free tier: 500 lookups/day; paid tier: higher rate limits for bulk queries):
+**VirusTotal hash API** (Public API free tier: 500 lookups/day; Premium tier: higher rate limits for bulk queries and licensed for commercial/business-workflow automation). This recheck runs against the *entire* approved inventory every scheduled run, not a fixed sample — the daily budget this competes for grows every time the pipeline promotes a new artifact, so treat this as an ongoing capacity trend to monitor, not a one-time sizing decision:
 
 ```python
 def recheck_vt(hashes: list, api_key: str) -> dict:
@@ -642,9 +845,9 @@ yara -r /etc/yara/ /tmp/recheck/ > /var/log/yara-recheck-$(date +%Y%m%d).log
 rm -rf /tmp/recheck/  # Clean up after scan
 ```
 
-**NSRL recheck** (local PostgreSQL database, free): update the NSRL dataset periodically from NIST. Recheck all hashes against the updated dataset.
+**NSRL recheck** (RDSv3 SQLite or ETL'd PostgreSQL, free): update the local NSRL dataset periodically from NIST and record the new `dataset_version`. Recheck all hashes against the updated dataset and log any `present_in_nsrl` / `not_present` status change for provenance history — this is not a recall signal by itself; NSRL has no malicious/benign verdict to change.
 
-**Authenticode OCSP recheck for Windows PE binaries:** Verify that the Authenticode signing certificate used on each approved Windows binary has not been subsequently revoked. Certificate revocation is a strong signal of a compromised build infrastructure or signing key.
+**Authenticode OCSP recheck for Windows PE binaries:** Verify that the Authenticode signing certificate used on each approved Windows binary has not been subsequently revoked. Certificate revocation is a strong signal of a compromised build infrastructure or signing key — **but a bare "revoked" OCSP response is not sufficient grounds for an automated block by itself.** A validly timestamped signature (RFC 3161) that predates the revocation is normal, expected behaviour — vendors rotate and revoke certificates routinely — not evidence of compromise. Extract and evaluate the trusted timestamp and the revocation reason code alongside the raw revocation status before deciding whether to auto-block or route to human review.
 
 ```bash
 # Check certificate revocation status via OCSP using OpenSSL
@@ -655,9 +858,16 @@ openssl ocsp \
   -text
 # Extract signing cert from PE binary first using osslsigncode:
 osslsigncode extract -in binary.exe -certs signing_certs.pem
+
+# Extract the RFC 3161 trusted timestamp and compare it against the revocation
+# effective date — a signature timestamped before revocation should not
+# auto-block on that basis alone.
+osslsigncode verify -in binary.exe -verbose  # reports timestamp info alongside signature status
 ```
 
-**Targeted CAPE recheck on IOC alerts:** When a threat intelligence report publishes IoCs (file hashes, process names, network indicators), the recheck job cross-references the IoCs against the Nexus inventory. Any artifact matching an IoC is submitted to the private CAPE sandbox for re-detonation before the recall decision is made.
+Recheck result handling for this signal (see the result-handling table below): auto-block only when the revocation reason is key-compromise **and** no valid trusted timestamp predates the revocation date; route routine-reason revocations, or revocations postdated by a valid timestamp, to human review instead.
+
+**Targeted re-detonation on IOC alerts:** When a threat intelligence report publishes IoCs (file hashes, process names, network indicators), the recheck job cross-references the IoCs against the Nexus inventory. Any artifact matching an IoC is submitted to its platform-appropriate private analysis profile for re-detonation — CAPE for Windows samples, the disposable Linux VM for Linux samples, the load-test harness for models — before the recall decision is made.
 
 **Model hub revision-drift recheck:** For Path C artifacts, re-resolve the current commit SHA for the reference the artifact was originally pinned from and compare it to the pinned SHA stored at intake.
 
@@ -725,9 +935,10 @@ Scheduling configuration, rate-limit budget allocation, false-positive dispositi
 | VirusTotal 2+ engine detections | GitLab recall issue opened; artifact flagged but not yet blocked | Security analyst reviews; decides block or false-positive |
 | VirusTotal 1 engine detection | Nexus tag updated; logged | Low priority human review |
 | YARA rule match on updated ruleset | GitLab recall issue opened; flagged for review | Security analyst reviews rule context; decides action |
-| Authenticode certificate revoked (OCSP) | Immediate block in Nexus; GitLab recall issue opened | Confirm block; notify affected systems; obtain clean replacement |
+| Authenticode certificate revoked for key-compromise reason, no valid timestamp predating revocation | Immediate block in Nexus; GitLab recall issue opened | Confirm block; notify affected systems; obtain clean replacement |
+| Authenticode certificate revoked, but valid trusted timestamp predates revocation, or reason is routine | GitLab recall issue opened; not auto-blocked | Analyst confirms this is a routine cert rotation, not a compromise indicator |
 | Authenticode / codesign / GPG signing identity changed | GitLab recall issue opened | Analyst verifies whether publisher legitimately rotated their cert/key |
-| NSRL status changed | Log entry created | Low priority human review |
+| NSRL presence status changed since intake | Log entry created for provenance history | Not a recall trigger — NSRL asserts identification, not current safety; informational only |
 | CAPE IOC match on targeted recheck | Immediate block; GitLab recall issue opened | Confirm block; incident response process initiated |
 | Model hub pinned revision drifted from current hub HEAD | GitLab recall issue opened | Analyst confirms whether the Nexus-pinned file remains the intended reviewed version |
 | Finding matches a suppressed confirmed-false-positive | Recheck timestamp updated; no new issue opened | None — re-evaluates automatically if hash or rule changes |
@@ -746,7 +957,8 @@ CREATE TABLE artifact_recheck_log (
     vt_malicious    INTEGER,       -- -1 = not in VT, 0 = clean, N = engine count
     mb_found        BOOLEAN,
     yara_match      TEXT,          -- rule name if matched, NULL if clean
-    nsrl_status     TEXT,          -- known_good / not_indexed / status_changed
+    nsrl_status     TEXT,          -- present_in_nsrl / not_present (informational only, not a recall signal)
+    nsrl_dataset_version TEXT,     -- RDSv3 dataset version used for this recheck
     auth_signature  TEXT,          -- Good / Revoked / Unknown / Mismatch (Authenticode, codesign, or GPG)
     cape_ioc_match  BOOLEAN,
     model_hub_drift BOOLEAN,       -- NULL for non-model artifacts
@@ -801,7 +1013,7 @@ GitLab intake ticket created by requestor
     → Webhook fires to GitLab CI / Jenkins
     → Squid proxy fetches artifact from allowlisted source
     → Artifact lands in Nexus quarantine repo with SHA-256 stored as component attribute
-    → Pipeline writes initial Nexus tags:
+    → Pipeline writes initial evidence database record (compact lookup tags mirrored to Nexus):
           requestor, approver, expiry, GitLab ticket ref, risk tier, artifact type
 
     For open source (Path A):
@@ -821,7 +1033,7 @@ GitLab intake ticket created by requestor
         Advisory record fetched → KB/CVE/severity tagged in Nexus + advisory JSON attached
         CMDB record created including expected signing identity, advisory reference
         ClamAV + YARA → results tagged
-        CAPE private sandbox (mandatory) → report attached to Nexus artifact
+        Profile-appropriate private dynamic analysis (mandatory) → PASS/FAIL/INCONCLUSIVE/UNAVAILABLE outcome and report attached to Nexus artifact
 
     For AI/ML model (Path C):
         Hub commit SHA resolved and pinned (not a mutable branch/tag) → result tagged
@@ -908,8 +1120,10 @@ Stage 4b   sha256sum + osslsigncode + gpg/rpm --checksig (baseline) + codesign (
 Stage 4c   huggingface_hub + safetensors + fickling/picklescan  — model revision pinning, format safety
 Stage 5a   Syft + Grype + Dependency-Track  — SBOM, SCA, continuous CVE monitoring
 Stage 5b   Custom pipeline script + Nexus tags + CMDB  — vendor advisory capture and inventory
-Stage 5c   Custom pipeline script + Nexus tags + CMDB/MLflow  — model card, license, lineage capture
-Stage 6    ClamAV + YARA + MalwareBazaar + NSRL + VT hash + CAPE Sandbox + firejail/gVisor load-test  — all artifact types
+Stage 5c   cyclonedx-python-lib (ML-BOM) + custom pipeline script + evidence DB + CMDB/MLflow  — ML-BOM, model card, license, lineage capture
+Stage 6    ClamAV + YARA + MalwareBazaar + NSRL + VT hash (all types) + per-platform profile:
+           CAPE Sandbox (Windows), disposable Linux VM/gVisor (Linux), binwalk/QEMU (firmware),
+           firejail/gVisor load-test harness (models) — see analysis profiles table
 Stage 7    Jenkins / GitLab CI gate     — cooling-off delay enforcement
 Stage 8    Jenkins / GitLab CI + Docker isolated runners  — test pipeline
 Stage 9    GitLab CE MR approvals + cosign  — promotion review gate with sign-off
@@ -983,8 +1197,10 @@ flowchart TB
     SCA -->|SBOM upload| DT[Dependency-Track\nOpen-source CVE monitoring]
     SCB -->|Advisory record + signing identity| CM[CMDB\nProprietary + model inventory\nPublisher trust register]
     SCC -->|Model card + pinned revision| CM
-    SCA -->|High-risk samples| CS[CAPE Sandbox\nPrivate dynamic analysis]
-    SCB -->|All proprietary samples| CS
+    SCA -->|High-risk samples| CS[CAPE Sandbox\nWindows user-mode only]
+    SCB -->|Windows user-mode samples| CS
+    SCB -->|Linux samples| LX[Disposable Linux VM/gVisor\nSyscall-monitored, no-egress]
+    SCB -->|Firmware samples| FW[Firmware Analysis\nbinwalk extraction + QEMU/FirmAE emulation]
     SCC -->|All model samples| MLT[No-egress Load-Test Sandbox\nfirejail / gVisor]
     SCA -->|Results + delay gate| JK
     SCB -->|Results + delay gate| JK
@@ -1053,10 +1269,10 @@ flowchart TB
 11. Stand up CMDB (Ralph or GitLab PostgreSQL table). Create publisher certificate thumbprint register with initial entries for known publishers (Microsoft, Adobe, Oracle, internal tooling).
 12. Write Stage 4b vendor hash verification script with Microsoft Update Catalog API integration.
 13. Write Stage 5b vendor advisory capture script with Microsoft MSRC API integration.
-14. Configure WSUS / SCCM / Intune to pull from Nexus approved repository.
+14. Configure the intake-to-WSUS handoff: on promotion of a Microsoft Update ID, the pipeline calls the WSUS/Configuration Manager API to import and approve that specific Update ID, which then downloads its content directly from Microsoft — WSUS is not configured to fetch from Nexus.
 
 **Phase 4 — Full pipeline (weeks 13–18)**
-15. Deploy CAPE Sandbox on dedicated KVM host. Integrate with pipeline for mandatory proprietary artifact detonation.
+15. Deploy CAPE Sandbox on a dedicated KVM host for Windows user-mode artifacts (budget the Windows guest OS licence). Stand up the disposable Linux VM/gVisor detonation harness for Linux artifacts and the binwalk/QEMU firmware analysis path for firmware artifacts. Integrate all profiles with the pipeline so every proprietary artifact resolves to a PASS/FAIL/INCONCLUSIVE/UNAVAILABLE outcome via the profile matching its platform, not CAPE alone.
 16. Implement cooling-off delay gate.
 17. Configure isolated Docker test runners.
 18. Implement GitLab MR promotion review workflow.
@@ -1106,7 +1322,9 @@ These mirror the open items in the architecture document, stated here in tooling
 
 ### 1. VirusTotal paid tier — procurement trigger
 
-The rate-limit budgeting logic (Phase 7, item 37) is a scheduling mitigation, not a capacity increase. Recommend setting a concrete inventory-size trigger now (e.g., budget approval requested automatically once Tier 2/3 staleness exceeds a defined threshold, such as 7 days between rechecks) rather than discovering the ceiling in production. Alternative: treat VirusTotal as Tier 1-only from the start and rely on MalwareBazaar (no meaningful rate limit) as the primary Stage 11b signal for Tier 2/3, deferring the procurement conversation entirely.
+The rate-limit budgeting logic (Phase 7, item 37) is a scheduling mitigation, not a capacity increase, and it is mitigating a problem that gets strictly worse over time: Stage 11b rechecks the entire approved inventory on every scheduled run, so every artifact this pipeline promotes is a permanent addition to the daily VirusTotal query load. There is no steady state where the free tier "is enough" — only a longer or shorter runway before Tier 2/3 staleness becomes unacceptable. Separately, VirusTotal's Public API terms restrict commercial/business-workflow automation, which an unattended nightly enterprise recheck job plausibly is, regardless of whether the 500/day ceiling is ever actually hit.
+
+Recommend setting a concrete inventory-size trigger now (e.g., budget approval requested automatically once Tier 2/3 staleness exceeds a defined threshold, such as 7 days between rechecks) rather than discovering the ceiling in production, **and** getting a separate legal/procurement read on whether the current Public API usage pattern already needs a Premium licence on ToS grounds alone. Alternative: treat VirusTotal as Tier 1-only from the start and rely on MalwareBazaar (no meaningful rate limit) as the primary Stage 11b signal for Tier 2/3 — this reduces how fast the rate-limit problem grows but does not resolve the ToS question.
 
 ### 2. Push-remediation coverage boundary
 
@@ -1127,3 +1345,11 @@ Not currently modeled in any pipeline stage or script in this document. If Legal
 ### 6. Alert-tuning cadence tooling
 
 The `fp_suppressions` table (Phase 7, item 37) gives the data needed to track suppression counts as a metric, but no dashboard or review cadence is built for it yet. A small Grafana panel querying `fp_suppressions` and `artifact_recheck_log` by month, reviewed at the same meeting as the quarterly CMDB review, would close this with minimal additional tooling.
+
+### 7. Structural documentation improvements — deferred, not scheduled
+
+Mirrors the architecture document's item 7. The independent review recommended a normative control-ID/traceability matrix, a formal artifact lifecycle state machine, and a shift from inline "open issues" text to Architecture Decision Records. Each is a legitimate improvement but a substantially larger investment than the tooling/factual corrections made in this revision — they are logged as deferred future work here, not actioned:
+
+- **Control catalogue and traceability matrix:** would give this guide's tool choices a formal mapping back to the control IDs the architecture document would define under its own item 7a. Only worth building once that control catalogue exists to map against.
+- **Lifecycle state machine tooling:** the evidence database schema (see the licensing/edition matrix's "Per-artifact evidence database" and Stage 3) is the natural place to implement the state machine the architecture document's item 7b describes — build them together rather than the state machine first.
+- **ADRs for tooling decisions:** several items in this "Open issues for internal review" section (VirusTotal tier, model registry choice, SoD enforcement mechanism) are exactly the kind of decision an ADR is meant to record once made. Adopting ADRs would give these decisions a permanent, dated record instead of relying on this section being kept in sync with what was actually decided.
