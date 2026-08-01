@@ -108,7 +108,7 @@ sequenceDiagram
     Portal->>Gov: Evaluate policy, risk tier, artifact type path
     Gov-->>Portal: Approve or reject with expiry date
     Portal->>Proxy: Authorised fetch order with source URL
-    Proxy->>Intake: Download from allowlisted source only; write intake metadata tags
+    Proxy->>Intake: Download from allowlisted source only, write intake metadata tags
     Note over Intake,Scan: Path diverges by artifact type
     Intake->>Scan: Open source — checksum, dep-confusion, Authenticode/codesign/GPG, SBOM, SCA, license, malware
     Intake->>Scan: Proprietary — vendor hash, platform signature thumbprint, NSRL lookup, advisory capture, ClamAV, YARA, private CAPE
@@ -117,12 +117,12 @@ sequenceDiagram
     Intake->>Delay: Enforce cooling-off window by risk tier
     Delay->>Test: Release to isolated test environment after hold expires
     Test-->>Gov: Report test results and signed evidence
-    Gov->>Repo: Promote artifact and all metadata; create CMDB entry for proprietary and model artifacts
+    Gov->>Repo: Promote artifact and all metadata, create CMDB entry for proprietary and model artifacts
     Team->>Repo: Consume from internal approved repository only
     Monitor11a->>Repo: Open source — re-evaluate SBOMs against updated CVE feeds (continuous)
     Monitor11a-->>Team: Notify owners of new CVE matches
     Monitor11b->>Repo: Scheduled recheck — extract all hashes from Nexus inventory
-    Monitor11b->>Monitor11b: Apply rate-limit budget across VT/MalwareBazaar queries; prioritise by risk tier
+    Monitor11b->>Monitor11b: Apply rate-limit budget across VT/MalwareBazaar queries, prioritise by risk tier
     Monitor11b->>Monitor11b: Query VirusTotal hash API for all stored hashes (within daily budget)
     Monitor11b->>Monitor11b: Query MalwareBazaar for all stored hashes
     Monitor11b->>Monitor11b: Re-scan stored binaries with updated YARA rulesets
