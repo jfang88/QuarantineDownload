@@ -6,7 +6,7 @@
 | Field | Value |
 |---|---|
 | Document title | Solution Architecture: Tooling and Implementation Guide |
-| Version | 1.7 |
+| Version | 1.8 |
 | Status | Draft for review |
 | Owner | Security Architecture |
 | Last updated | 2026-08-02 |
@@ -23,6 +23,7 @@
 | 1.5 | 2026-08-02 | Security Architecture | Scoped macOS code-signing tooling as optional/build-on-demand based on confirmed enterprise estate (Windows desktops, mixed Windows/Linux servers, Linux developer IDEs); moved the macOS rollout item out of the Phase 7 critical path; Windows (Authenticode) and Linux (GPG/RPM/DEB) tooling remain baseline |
 | 1.6 | 2026-08-02 | Security Architecture | Addressed `architecture-tooling-review.md` findings: added licensing/edition decision matrix; corrected NSRL, VirusTotal, Repository Firewall/evidence-database, WSUS/Update Catalog, and Dependency-Track claims; replaced blanket CAPE mandate with per-platform analysis profiles; fixed the trust-root section's own `curl \| sh` install pattern; added ML-BOM tooling for models; added model-sandbox resource limits and Stage 2 SSRF hardening; added signature-verification nuance |
 | 1.7 | 2026-08-02 | Security Architecture | Replaced the inline "Open issues for internal review" section with a pointer to the new `adr/` directory per ADR-0002 |
+| 1.8 | 2026-08-02 | Security Architecture | Added a References section distinguishing claims independently verified against a live source this session (Dependency-Track 5.x requirements, WSUS/Update Catalog workflow, GitLab CE approvals, VirusTotal ToS, Syft/Grype, Sigstore/cosign, Trivy compromise, CycloneDX ML-BOM, safetensors) from carried and unverified claims (CAPE, Apple codesign, osslsigncode, fickling/picklescan, binwalk/FirmAE, Keycloak specifics, MSRC CVRF/CSAF, GGUF, Docker Desktop/WSL2) |
 
 > **9 architecture decisions are still open** and are not yet reflected as final in this document, including whether the tool choices below should be built as described, bought from commercial vendors, or partially replaced under a hybrid sourcing strategy — see [ADR-0012](adr/0012-build-vs-buy-vs-hybrid-sourcing-strategy.md) and [`enterprise-build-vs-buy-evaluation.md`](enterprise-build-vs-buy-evaluation.md). See [`adr/README.md`](adr/README.md) for the full register, or jump to [Open decisions](#open-decisions) at the bottom of this document.
 >
@@ -1345,3 +1346,42 @@ What this table adds beyond the register is purely tooling-specific: which rollo
 | [0012](adr/0012-build-vs-buy-vs-hybrid-sourcing-strategy.md) Build-vs-buy-vs-hybrid sourcing strategy | **Every phase in this document.** If Buy or Hybrid is selected, the tool-by-tool recommendations below (Syft/Grype, ClamAV/YARA, CAPE, GitLab CE, and most of the "Recommended stack") are candidates to be partially replaced by commercial product, not a settled implementation plan — see `enterprise-build-vs-buy-evaluation.md`. |
 
 Close these out with a recorded decision (updating the ADR's `Status` to `Accepted` and filling in its Decision Outcome, then moving it to the "Decided" table in `adr/README.md`) before or during the rollout window it blocks. **Resolve ADR-0012 first** — it's the only one that can invalidate rather than just refine the rollout plan below.
+
+---
+
+## References
+
+Per claim: independently checked against a live source, carried from a citation already established elsewhere in this repository, or not verified this session. A specific tool version, capability claim, or licensing requirement should not be trusted just because it appears in a document with an authoritative tone — this section exists so a reader can tell which lines that applies to.
+
+### Verified against a live source this session (2026-08-02)
+
+| Claim in this document | Source | What was confirmed |
+|---|---|---|
+| Dependency-Track 5.x is container-only (no WAR/executable JAR) and requires external PostgreSQL 14+ (H2/MySQL/SQL Server support dropped) | [Dependency-Track releases](https://github.com/DependencyTrack/dependency-track/releases) | Confirmed exactly the deployment-note claim used to correct the deprecated `dependencytrack/bundled` quick-start |
+| WSUS imports updates via the Microsoft Update Catalog's UpdateID, using a documented PowerShell workflow, and downloads content directly from Microsoft — not via a third-party repository proxy | [Microsoft Learn — WSUS and the Microsoft Update Catalog](https://learn.microsoft.com/en-us/windows-server/administration/windows-server-update-services/manage/wsus-and-the-catalog-site) | Confirmed the ImportUpdateFromCatalogSite/UpdateID workflow this document's Stage 4b tooling and Phase 3 rollout step rely on |
+| GitLab CE/Free merge request approvals are optional and don't block merging; required approval rules are Premium/Ultimate-only | [GitLab Docs — Merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/) | Same verification as `package-intake-architecture.md`; directly informs the Stage 9 CE-vs-scripted-gate guidance |
+| VirusTotal's Public API prohibits commercial/automated business-workflow use and caps at 500 requests/day | [VirusTotal Docs — Public vs Premium API](https://docs.virustotal.com/reference/public-vs-premium-api) | Confirmed the ToS restriction and rate limit behind every VirusTotal capacity/licensing caveat in this document |
+| Syft generates SBOMs (SPDX/CycloneDX) and Grype scans SBOMs for known vulnerabilities; both are Anchore open-source tools | [Anchore Open Source](https://anchore.com/opensource/) | Confirmed the core capability split this document's Stage 5a tooling assumes. Apache 2.0 licensing was not independently re-confirmed in this fetch (widely documented on the tools' own repositories, but noting the gap for honesty) |
+| Sigstore/cosign sign and verify both container images and arbitrary blobs/artifacts, and are fully open source | [Sigstore Docs](https://docs.sigstore.dev/) | Confirmed blob-signing capability (`cosign verify-blob`) used throughout the pipeline-tooling-supply-chain section |
+| The March 2026 Trivy ecosystem compromise (malicious releases, hijacked GitHub Actions tags) is real and matches the description used to justify recommending Syft over Trivy | [Aqua Security / GitHub Advisory GHSA-69fq-xp46-6x23](https://github.com/aquasecurity/trivy/security/advisories/GHSA-69fq-xp46-6x23) | Confirmed timeline, scope, and affected distribution channels |
+| CycloneDX supports a Machine Learning Bill of Materials capturing models, datasets, provenance, and lineage | [CycloneDX — ML-BOM](https://cyclonedx.org/capabilities/mlbom/) | Confirmed scope behind the `cyclonedx-python-lib` ML-BOM generation example in Stage 5c |
+| `safetensors` stores tensor data only, with no arbitrary-code execution surface | [Hugging Face — safetensors](https://huggingface.co/docs/safetensors/index) | Confirmed the format's stated design purpose behind the Stage 4c format-validation requirement |
+
+### Carried from `architecture-tooling-review.md`'s own citations
+
+- Sonatype Repository Firewall and Firewall Quarantine licensing separate from Nexus Repository Pro — [Sonatype Help: Repository Firewall](https://help.sonatype.com/en/repository-firewall.html), [Firewall Quarantine](https://help.sonatype.com/en/firewall-quarantine.html)
+- Sonatype's component-level Tags API (behind the "illustrative example, validate against Swagger" caveats on the Nexus tag examples) — [Sonatype Help: Tagging](https://help.sonatype.com/en/tagging.html)
+
+### Not independently verified in this pass
+
+Based on general/training knowledge rather than a source checked this session. Plausible and, as far as the author is aware, accurate, but not re-confirmed live — check before relying on these for a purchasing or compliance decision:
+
+- CAPE Sandbox's architecture, Cuckoo-fork lineage, and Windows-guest requirement (three fetch attempts against CAPE-related sources failed with network errors during this session, rather than returning contradicting information)
+- Apple `codesign`/notarization's two-part verification model (a fetch against Apple's own security guide returned an incomplete excerpt that neither confirmed nor contradicted the claim)
+- `osslsigncode`'s specific command syntax and cross-platform Authenticode-verification behavior on Linux
+- `fickling`'s and `picklescan`'s specific detection scope for pickle opcodes
+- `binwalk`'s firmware-extraction capability and the FirmAE emulation project
+- Keycloak's specific OIDC/SAML/LDAP-federation feature set (confirmed as an open-source CNCF project via live fetch, but the specific protocol/federation claims were not confirmed in the fetched excerpt)
+- The Microsoft MSRC CVRF/CSAF API's exact schema and update cadence
+- GGUF as a flat tensor-and-metadata container format structurally analogous to `safetensors`
+- Docker Desktop's WSL2 memory-overhead figures and the `.wslconfig` behavior described in the POC sizing guidance (see `poc-deployment-plan.md`'s own References for that claim specifically)

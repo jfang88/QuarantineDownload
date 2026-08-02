@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Document title | Enterprise Package Intake and Approved Repository Architecture |
-| Version | 1.8 |
+| Version | 1.9 |
 | Status | Draft for review |
 | Owner | Security Architecture |
 | Last updated | 2026-08-02 |
@@ -23,6 +23,7 @@
 | 1.6 | 2026-08-02 | Security Architecture | Scoped macOS binary authentication as optional/on-demand rather than a baseline requirement, based on confirmed enterprise estate composition (Windows desktops, mixed Windows/Linux servers, Linux developer IDEs — no confirmed macOS fleet); Windows and Linux platform signature verification remain baseline requirements |
 | 1.7 | 2026-08-02 | Security Architecture | Addressed `architecture-tooling-review.md` findings: corrected NSRL to RDSv3/reference-corpus semantics; corrected VirusTotal Public API ToS and rate-limit-at-scale framing; split Repository Firewall quarantine from the generic intake evidence store and introduced the evidence database; replaced blanket "mandatory CAPE" with per-platform analysis profiles and PASS/FAIL/INCONCLUSIVE/UNAVAILABLE outcomes; corrected WSUS/Update Catalog and Dependency-Track where-used claims; added CycloneDX ML-BOM for models; softened proprietary-SBOM absolutism; added model-sandbox resource-abuse limits; added SSRF hardening to Stage 2; added signature-verification nuance (per-source Linux verification, OCSP timestamp handling); renamed "silent repoint" to "mutable-source-reference drift" |
 | 1.8 | 2026-08-02 | Security Architecture | Added the formal artifact lifecycle state machine (state table, `stateDiagram-v2`, transitions/actors/evidence table, idempotency and cross-system reconciliation rules) per ADR-0003; replaced the inline "Open issues for internal review" section with a pointer to the new `adr/` directory per ADR-0002 |
+| 1.9 | 2026-08-02 | Security Architecture | Added a References section distinguishing claims independently verified against a live source this session (NSRL RDSv3, VirusTotal ToS, GitLab CE approvals, CycloneDX ML-BOM, PyTorch pickle risk, safetensors, Trivy compromise, Authenticode, Sigstore/cosign, EICAR) from claims carried from `architecture-tooling-review.md`'s citations and claims not independently re-checked (CAPE lineage, Apple codesign, Debian signing, GGUF, RFC 1918/3161, MalwareBazaar) |
 
 > **9 architecture decisions are still open** and are not yet reflected as final in this document — controls described below may change once they're resolved. That includes the top-level question of whether this control model should be built as described, bought from commercial vendors, or built as a thin layer over bought components (see [ADR-0012](adr/0012-build-vs-buy-vs-hybrid-sourcing-strategy.md) and [`enterprise-build-vs-buy-evaluation.md`](enterprise-build-vs-buy-evaluation.md)). See [`adr/README.md`](adr/README.md) for the full register (what's decided, what isn't, and why), or jump to [Open decisions](#open-decisions) at the bottom of this document for the list scoped to this file.
 
@@ -858,6 +859,45 @@ Undecided architecture questions are tracked as **Architecture Decision Records*
 **That register is intentionally not duplicated here.** An earlier revision of this section repeated the full ADR table in both this document and the tooling guide, which is exactly the two-copies-of-the-same-list problem ADRs were adopted to solve in the first place (see ADR-0002's Context) — a decision made in one copy and forgotten in the other is worse than no table at all. `adr/README.md` is the single source of truth for status; this document and the tooling guide both link to it rather than mirror it.
 
 As of this revision: **9 open, 3 decided.** The three decided ones are directly reflected in this document already — [ADR-0001](adr/0001-two-document-split.md) (this document stays separate from the tooling guide), [ADR-0002](adr/0002-adopt-architecture-decision-records.md) (this section itself), and [ADR-0003](adr/0003-adopt-artifact-lifecycle-state-machine.md) (the lifecycle state machine above). The 9 open ones — VirusTotal licensing, push-remediation reach, SoD enforcement mechanism, model registry tooling, export control routing, alert-tuning cadence, control-ID taxonomy, backup RPO/RTO, and [build-versus-buy-versus-hybrid sourcing strategy](adr/0012-build-vs-buy-vs-hybrid-sourcing-strategy.md) — are not yet reflected as final anywhere in this document; treat the relevant sections above as the current best guess pending that sign-off, not settled policy. The sourcing-strategy decision (ADR-0012) is the largest of the nine: everything else in this list assumes a particular set of tools already, and that assumption is itself unresolved.
+
+---
+
+## References
+
+This section states, per claim, whether it was independently checked against a live authoritative source, carried from a source already cited elsewhere in this repository, or is a design recommendation that isn't a factual claim requiring a citation at all. The intent is to make the confidence level explicit rather than presenting every statement in this document with the same authority — a recommendation ("use a no-egress sandbox") doesn't need a citation; a specific factual claim about a product or standard ("GitLab CE cannot enforce required approvals") does, and should not be taken on faith just because it appears in a document that looks authoritative.
+
+### Verified against a live source this session (2026-08-02)
+
+| Claim in this document | Source | What was confirmed |
+|---|---|---|
+| NSRL is distributed as RDSv3 SQLite, not the older RDS 2.x text/flat-file format | [NIST NSRL — Current RDS Hash Sets](https://www.nist.gov/itl/csd/secure-systems-and-applications/national-software-reference-library-nsrl/nsrl-download-0) | NIST has completed the transition away from RDS 2.x and publishes RDSv3 SQLite exclusively |
+| VirusTotal's Public API prohibits commercial/automated business-workflow use and caps at 500 requests/day | [VirusTotal Docs — Public vs Premium API](https://docs.virustotal.com/reference/public-vs-premium-api) | Confirmed both the ToS restriction and the 500/day, 4/minute rate limit |
+| GitLab CE/Free merge request approvals are optional and don't block merging; required approval rules are Premium/Ultimate-only | [GitLab Docs — Merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/) | Confirmed the tier boundary exactly as stated in the Licensing and edition decision matrix |
+| CycloneDX supports a Machine Learning Bill of Materials capturing models, datasets, provenance, and training methodology | [CycloneDX — ML-BOM](https://cyclonedx.org/capabilities/mlbom/) | Confirmed scope of what ML-BOM captures |
+| `torch.load()` (pickle-based) has a materially larger attack surface than `safetensors`; PyTorch's own security guidance recommends safetensors for untrusted sources | [PyTorch Security Policy](https://github.com/pytorch/pytorch/security/policy) | Confirmed via PyTorch's own security policy document |
+| `safetensors` stores tensor data only, with no arbitrary-code execution surface, specifically as a safe alternative to pickle | [Hugging Face — safetensors](https://huggingface.co/docs/safetensors/index) | Confirmed the format's stated design purpose |
+| The March 2026 Trivy ecosystem compromise (malicious releases, hijacked GitHub Actions tags) is real and matches the description used as a cautionary example | [Aqua Security / GitHub Advisory GHSA-69fq-xp46-6x23](https://github.com/aquasecurity/trivy/security/advisories/GHSA-69fq-xp46-6x23) | Confirmed timeline, scope, and exposure windows |
+| Authenticode verifies both publisher identity (via certificate chain to a trusted CA) and content integrity (unmodified since signing) | [Microsoft Learn — Authenticode Digital Signatures](https://learn.microsoft.com/en-us/windows-hardware/drivers/install/authenticode) | Confirmed the two-part verification model this document relies on |
+| Sigstore/cosign sign and verify both container images and arbitrary blobs/artifacts, and are fully open source | [Sigstore Docs](https://docs.sigstore.dev/) | Confirmed blob-signing (not just container images) and open-source status |
+| The EICAR test file is a standardized, safe, non-malicious antivirus test signature that scanners like ClamAV are expected to detect | [EICAR — Anti-Malware Testfile](https://eicar.org/download-anti-malware-testfile/) | Confirmed EICAR's own description of the file's purpose and safety |
+
+### Carried from `architecture-tooling-review.md`'s own citations
+
+The independent review that drove this document's v1.7 corrections (see the revision history) cited primary sources for several claims this document incorporated. These are re-listed here rather than re-verified independently in this pass, since they trace to the same review this document already credits:
+
+- Sonatype Repository Firewall and Firewall Quarantine are licensed separately from Nexus Repository Pro — [Sonatype Help: Repository Firewall](https://help.sonatype.com/en/repository-firewall.html), [Firewall Quarantine](https://help.sonatype.com/en/firewall-quarantine.html)
+- Dependency-Track's release and migration requirements — [Dependency-Track releases](https://github.com/DependencyTrack/dependency-track/releases) (also independently re-verified for the 5.x/PostgreSQL specifics — see `solution-architecture-tooling.md`'s References)
+
+### Not independently verified in this pass
+
+These claims are based on general/training knowledge rather than a source checked during this session. They are plausible and, as far as the author is aware, accurate, but they have not been re-confirmed against a live authoritative source and should be checked before being relied on for a procurement or compliance decision:
+
+- CAPE Sandbox's architecture and its lineage as a Cuckoo Sandbox fork (three fetch attempts against CAPE-related documentation failed with network errors during this session, rather than returning contradicting information)
+- Apple's `codesign`/notarization two-part verification model (signature validity plus Apple's notarization ticket)
+- Debian/APT's repository-metadata trust model (`InRelease`/`Release.gpg`) as distinct from optional per-package `dpkg-sig` signing
+- GGUF as a flat tensor-and-metadata container format with no code-execution surface, structurally analogous to `safetensors`
+- RFC 1918 (private IPv4 ranges) and RFC 3161 (trusted timestamping) — these are long-stable, foundational IETF standards not expected to have changed; not re-fetched live this session, but very low risk of having drifted from what's described here
+- MalwareBazaar's (abuse.ch) hash-lookup API behavior and free-tier terms
 
 ---
 

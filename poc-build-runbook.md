@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Document title | Package Intake POC Build Runbook and Demo Script |
-| Version | 1.1 |
+| Version | 1.2 |
 | Status | Draft for review |
 | Owner | Security Architecture |
 | Last updated | 2026-08-02 |
@@ -16,6 +16,7 @@
 |---|---|---|---|
 | 1.0 | 2026-08-02 | Security Architecture | Initial POC build runbook — Compose services, build procedure, demo script, troubleshooting |
 | 1.1 | 2026-08-02 | Security Architecture | Propagated the lifecycle state renames from `poc-deployment-plan.md` v1.1 through the demo script and troubleshooting sections; removed the ambiguous `sandbox` Compose profile row and replaced it with a documented manual-VM procedure; added a 16 GB laptop start profile alongside the existing recommended profile |
+| 1.2 | 2026-08-02 | Security Architecture | Added a References section pointing to `poc-deployment-plan.md`'s verified claims and listing this document's own unverified ones |
 
 ## Purpose
 
@@ -899,3 +900,15 @@ After this documentation is approved, implement the POC in small check-ins:
 8. Optional Dependency-Track, observability, directory federation, and sandbox profiles.
 
 Each check-in should include automated tests for the transition or control it adds, rather than waiting for an end-to-end demonstration to reveal authorization or lifecycle defects.
+
+---
+
+## References
+
+This document is mostly original build/config material (Compose service definitions, YARA rule examples, script contracts) rather than claims about external products, so there isn't much here to independently verify beyond what's already covered in `poc-deployment-plan.md`'s References section — see that document for the Docker Desktop/WSL2 memory-configuration claim and the EICAR test-file claim behind Section 5 of the demo script and the "Fixtures" pre-demo checklist.
+
+### Not independently verified in this pass
+
+- `docker compose --profile` selective-service-startup behavior (a genuine Docker Compose v2 feature, but not re-confirmed against Docker's own documentation this session)
+- YARA rule syntax in the baseline/recheck rule examples (standard YARA syntax as far as the author is aware, not re-validated against a YARA parser this session)
+- `openssl ocsp` command syntax referenced in the troubleshooting/OCSP-adjacent sections of the main architecture documents this runbook implements
