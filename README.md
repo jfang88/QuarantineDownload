@@ -26,6 +26,12 @@ A cross-cutting post-approval re-evaluation process addresses newly discovered s
 | [`poc-deployment-plan.md`](poc-deployment-plan.md) | The deliberately reduced proof-of-concept scope: identity model, container/VM topologies, sizing, use cases, failure simulations, acceptance criteria, and alternatives considered. |
 | [`poc-build-runbook.md`](poc-build-runbook.md) | The POC build procedure, service layout, safe test fixtures, operating runbook, demo script, troubleshooting, reset, and shutdown actions. |
 
+## Supporting materials
+
+| Material | Purpose |
+|---|---|
+| [`slide-decks/`](slide-decks/) | Management-level briefing slide decks derived from the documents above — problem framing, detection-timeline evidence, and the open-source-vs-commercial sourcing decision. Presentation aids, not authoritative documentation; the markdown documents above are the source of truth and take precedence if the two ever diverge. |
+
 ## Recommended reading order
 
 1. Read `package-intake-architecture.md` for the target control model.
