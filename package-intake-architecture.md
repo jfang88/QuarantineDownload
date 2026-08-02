@@ -24,6 +24,8 @@
 | 1.7 | 2026-08-02 | Security Architecture | Addressed `architecture-tooling-review.md` findings: corrected NSRL to RDSv3/reference-corpus semantics; corrected VirusTotal Public API ToS and rate-limit-at-scale framing; split Repository Firewall quarantine from the generic intake evidence store and introduced the evidence database; replaced blanket "mandatory CAPE" with per-platform analysis profiles and PASS/FAIL/INCONCLUSIVE/UNAVAILABLE outcomes; corrected WSUS/Update Catalog and Dependency-Track where-used claims; added CycloneDX ML-BOM for models; softened proprietary-SBOM absolutism; added model-sandbox resource-abuse limits; added SSRF hardening to Stage 2; added signature-verification nuance (per-source Linux verification, OCSP timestamp handling); renamed "silent repoint" to "mutable-source-reference drift" |
 | 1.8 | 2026-08-02 | Security Architecture | Added the formal artifact lifecycle state machine (state table, `stateDiagram-v2`, transitions/actors/evidence table, idempotency and cross-system reconciliation rules) per ADR-0003; replaced the inline "Open issues for internal review" section with a pointer to the new `adr/` directory per ADR-0002 |
 
+> **8 architecture decisions are still open** and are not yet reflected as final in this document — controls described below may change once they're resolved. See [`adr/README.md`](../adr/README.md) for the full register (what's decided, what isn't, and why), or jump to [Open decisions](#open-decisions) at the bottom of this document for the list scoped to this file.
+
 ---
 
 ## Overview
@@ -851,21 +853,11 @@ Additional policy guidance per type:
 
 ## Open decisions
 
-Undecided architecture questions are tracked as **Architecture Decision Records** in [`adr/`](../adr/README.md) rather than as inline text in this document — see [ADR-0002](../adr/0002-adopt-architecture-decision-records.md) for why. Each ADR states the context, the considered options with pros/cons, and (once decided) the outcome and consequences; `Proposed` ADRs are still open for review-meeting sign-off.
+Undecided architecture questions are tracked as **Architecture Decision Records** in [`adr/README.md`](../adr/README.md) rather than as inline text in this document — see [ADR-0002](../adr/0002-adopt-architecture-decision-records.md) for why. Each ADR states the context, the considered options with pros/cons, and (once decided) the outcome and consequences.
 
-| ADR | Question | Status |
-|---|---|---|
-| [0001](../adr/0001-two-document-split.md) | Keep this document and the tooling guide separate, or merge them? | Accepted — kept separate |
-| [0002](../adr/0002-adopt-architecture-decision-records.md) | Adopt ADRs in place of this section's previous inline format | Accepted |
-| [0003](../adr/0003-adopt-artifact-lifecycle-state-machine.md) | Adopt the formal lifecycle state machine (see above) | Accepted |
-| [0004](../adr/0004-virustotal-public-api-usage-and-licensing.md) | When does the paid VirusTotal tier become mandatory? | Proposed |
-| [0005](../adr/0005-push-remediation-coverage-boundary.md) | How far does automated push remediation reach? | Proposed |
-| [0006](../adr/0006-segregation-of-duties-enforcement-mechanism.md) | How is pipeline-admin segregation of duties technically enforced? | Proposed |
-| [0007](../adr/0007-model-registry-tooling-choice.md) | Dedicated model registry, or Nexus tags plus CMDB? | Proposed |
-| [0008](../adr/0008-export-control-and-legal-review-routing.md) | Export control / legal review routing | Proposed |
-| [0009](../adr/0009-alert-tuning-ownership-and-cadence.md) | Alert-tuning ownership and cadence | Proposed |
-| [0010](../adr/0010-control-id-taxonomy-and-traceability-matrix.md) | Adopt a normative control-ID taxonomy and traceability matrix? | Proposed — explicitly deferred |
-| [0011](../adr/0011-backup-rpo-rto-targets.md) | Backup RPO/RTO targets and tooling for systems of record | Proposed |
+**That register is intentionally not duplicated here.** An earlier revision of this section repeated the full ADR table in both this document and the tooling guide, which is exactly the two-copies-of-the-same-list problem ADRs were adopted to solve in the first place (see ADR-0002's Context) — a decision made in one copy and forgotten in the other is worse than no table at all. `adr/README.md` is the single source of truth for status; this document and the tooling guide both link to it rather than mirror it.
+
+As of this revision: **8 open, 3 decided.** The three decided ones are directly reflected in this document already — [ADR-0001](../adr/0001-two-document-split.md) (this document stays separate from the tooling guide), [ADR-0002](../adr/0002-adopt-architecture-decision-records.md) (this section itself), and [ADR-0003](../adr/0003-adopt-artifact-lifecycle-state-machine.md) (the lifecycle state machine above). The 8 open ones — VirusTotal licensing, push-remediation reach, SoD enforcement mechanism, model registry tooling, export control routing, alert-tuning cadence, control-ID taxonomy, and backup RPO/RTO — are not yet reflected as final anywhere in this document; treat the relevant sections above as the current best guess pending that sign-off, not settled policy.
 
 ---
 
