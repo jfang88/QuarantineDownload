@@ -1,5 +1,22 @@
 # Package Intake POC Build Runbook and Demo Script
 
+## Document control
+
+| Field | Value |
+|---|---|
+| Document title | Package Intake POC Build Runbook and Demo Script |
+| Version | 1.1 |
+| Status | Draft for review |
+| Owner | Security Architecture |
+| Last updated | 2026-08-02 |
+
+### Revision history
+
+| Version | Date | Author | Summary of changes |
+|---|---|---|---|
+| 1.0 | 2026-08-02 | Security Architecture | Initial POC build runbook — Compose services, build procedure, demo script, troubleshooting |
+| 1.1 | 2026-08-02 | Security Architecture | Propagated the lifecycle state renames from `poc-deployment-plan.md` v1.1 through the demo script and troubleshooting sections; removed the ambiguous `sandbox` Compose profile row and replaced it with a documented manual-VM procedure; added a 16 GB laptop start profile alongside the existing recommended profile |
+
 ## Purpose
 
 This runbook describes how to build, operate, demonstrate, reset, and shut down the package-intake POC defined in [`poc-deployment-plan.md`](poc-deployment-plan.md).
@@ -76,7 +93,7 @@ The architecture documents can remain at the repository root. The POC code may b
 
 ### Host
 
-Recommended host for the standard demo profile:
+Recommended dedicated host for the standard demo profile (Syft/Grype, no observability/directory/sandbox):
 
 - Linux host or Linux VM;
 - 10-12 vCPU;
@@ -86,6 +103,8 @@ Recommended host for the standard demo profile:
 - `curl`, `jq`, `openssl`, `sha256sum`, and `make` or equivalent;
 - browser access to the POC host;
 - time synchronization enabled.
+
+**Running via Docker Desktop on a laptop instead of a dedicated host?** See `poc-deployment-plan.md`'s "Docker Desktop on a laptop" section for concrete 16 GB and 32 GB sizing, including the `.wslconfig`/Docker Desktop memory settings — the numbers above assume a machine with nothing else running on it, which a laptop generally isn't. In short: a 16 GB laptop can run `core` + `scan` only, serialized, with everything else closed; a 32 GB laptop can comfortably add `scan` and `sca` (Syft/Grype).
 
 A smaller host can run the core profile if Dependency-Track, Grafana, and all sandbox services are disabled.
 
@@ -135,6 +154,14 @@ The `.env.example` file should contain names and placeholders only.
 | `prometheus` | `observe` | Optional metrics. |
 | `grafana` | `observe` | Optional dashboards. |
 | `openldap` | `directory` | Optional directory federation demonstration. |
+
+**Dynamic-analysis sandbox is not a Compose service.** It is a manually-managed VM (VM4 in the deployment plan's VM-based topology), started only for the specific demo segment that needs it:
+
+1. Stand up a disposable Windows or Linux VM on the same host or an adjacent host, per the deployment plan's VM4 sizing.
+2. Give it a route to `analysis-worker` for a narrow, authenticated result-return callback only — no route to `control`, no credentials, no persistent storage of secrets.
+3. `analysis-worker` submits a sample to the VM's detonation endpoint and polls or waits for the callback; treat a missing callback the same as any other scanner timeout (`INCONCLUSIVE`, fail closed).
+4. Snapshot the VM before the demo segment and revert to the snapshot afterward; never reuse a post-detonation VM state.
+5. Power the VM off outside that demo segment — it is not part of the `core`/`scan`/`sca`/`observe`/`directory` Compose profile set and has no `docker compose --profile sandbox` equivalent.
 
 ## Network configuration
 
@@ -566,7 +593,7 @@ The POC is proving a control system, not merely running scanners. Identity, stat
 4. Show the failed checksum verdict.
 5. Attempt to promote or download the artifact.
 
-**Expected state:** `ANALYSIS_FAILED` or `REJECTED`.
+**Expected state:** `ANALYSIS_FAILED`.
 
 **Key message:** A clean malware scan does not override failed integrity evidence.
 
@@ -577,7 +604,7 @@ The POC is proving a control system, not merely running scanners. Identity, stat
 3. Show that the object remains in quarantine for evidence but is not available to consumers.
 4. Show the raw report and scanner-database version.
 
-**Expected state:** `ANALYSIS_FAILED` or `REJECTED`.
+**Expected state:** `ANALYSIS_FAILED`.
 
 **Key message:** The demonstration uses a standard test signature, not live malware.
 
@@ -603,7 +630,7 @@ The POC is proving a control system, not merely running scanners. Identity, stat
 3. Show the resolved destination and blocked policy rule.
 4. Optionally demonstrate an allowlisted mock hostname that redirects to a blocked destination.
 
-**Expected state:** `FETCH_FAILED` or `REJECTED`.
+**Expected state:** `FETCH_FAILED`.
 
 **Key message:** The downloader treats user-supplied URLs as hostile input and validates every redirect destination.
 

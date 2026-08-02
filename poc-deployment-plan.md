@@ -1,10 +1,29 @@
 # Package Intake POC Deployment Plan
 
+## Document control
+
+| Field | Value |
+|---|---|
+| Document title | Package Intake POC Deployment Plan |
+| Version | 1.1 |
+| Status | Draft for review |
+| Owner | Security Architecture |
+| Last updated | 2026-08-02 |
+
+### Revision history
+
+| Version | Date | Author | Summary of changes |
+|---|---|---|---|
+| 1.0 | 2026-08-02 | Security Architecture | Initial POC deployment plan — scope, identity model, topology, sizing, use cases, acceptance criteria |
+| 1.1 | 2026-08-02 | Security Architecture | Aligned the POC lifecycle state names with `package-intake-architecture.md`'s formal state machine (ADR-0003) and added an explicit scope-cut mapping; completed the evidence-by-transition table; clarified the sandbox profile is a manual, separately-wired VM rather than a Compose profile; noted the portal/model-registry choices are demo conveniences, not resolutions of ADR-0006/ADR-0007; added a true minimal profile sized for a 16 GB Docker Desktop laptop alongside the existing 32 GB "recommended demo" tier |
+
 ## Document purpose
 
 This document turns the reference architecture into a demonstrable proof of concept (POC). It is intentionally smaller than the production target. The POC proves the control flow, identity boundaries, evidence model, artifact lifecycle, and recall behaviour without requiring every production product, licence, feed, sandbox, or high-availability feature.
 
 The companion document, [`poc-build-runbook.md`](poc-build-runbook.md), contains the build steps, operating procedures, demo script, and reset actions.
+
+> **This POC's own choices don't resolve open architecture decisions.** The purpose-built portal (instead of GitLab CE) and the absence of a model registry are demonstration conveniences, not answers to [ADR-0006](adr/0006-segregation-of-duties-enforcement-mechanism.md) (SoD enforcement mechanism) or [ADR-0007](adr/0007-model-registry-tooling-choice.md) (model registry tooling) — both remain open for the production design regardless of what this POC builds.
 
 ## POC objectives
 
@@ -130,7 +149,7 @@ Create a realm named `package-intake-poc` with an OIDC client for the portal. Us
 
 ## Artifact lifecycle for the POC
 
-Use explicit states rather than deriving state from repository location alone.
+Use explicit states rather than deriving state from repository location alone. State names below are aligned with the formal state machine in `package-intake-architecture.md` (ADR-0003) wherever a formal equivalent exists — see "Mapping to the formal lifecycle" below for the handful of POC-only implementation states and the formal states this POC deliberately does not demonstrate.
 
 ```text
 DRAFT
@@ -141,8 +160,8 @@ DRAFT
   -> ANALYSING
   -> ANALYSIS_PASSED | ANALYSIS_FAILED | INCONCLUSIVE
   -> COOLING
-  -> READY_FOR_PROMOTION
-  -> APPROVED | REJECTED
+  -> PENDING_PROMOTION
+  -> APPROVED | PROMOTION_REJECTED
   -> SUSPENDED | RECALLED | EXPIRED
 ```
 
@@ -150,12 +169,50 @@ DRAFT
 
 | Transition | Required evidence |
 |---|---|
+| `DRAFT -> REQUESTED` | Requestor identity, source URL, declared artifact type, expected checksum if known, justification, target use, risk tier. |
 | `REQUESTED -> APPROVED_TO_FETCH` | Distinct approver identity, business justification, source URL, declared artifact type, risk tier. |
-| `APPROVED_TO_FETCH -> ACQUIRED` | Resolved destination, redirect chain, TLS/source data, byte count, SHA-256, object-store version ID. |
-| `ACQUIRED -> ANALYSIS_PASSED` | File type, checksum verdict, ClamAV verdict, YARA verdict, path-specific evidence, scanner versions. |
-| `ANALYSIS_PASSED -> READY_FOR_PROMOTION` | Cooling-off completion or explicit demo override with reason. |
-| `READY_FOR_PROMOTION -> APPROVED` | Promotion approver, immutable evidence bundle ID, approved object location, expiry date. |
-| `APPROVED -> SUSPENDED/RECALLED` | Recheck finding, analyst decision, rule/feed version, affected object hash. |
+| `REQUESTED -> REJECTED` | Approver identity, rejection reason. |
+| `APPROVED_TO_FETCH -> FETCHING` | Job dispatch record, worker identity, idempotency key. |
+| `FETCHING -> ACQUIRED` | Resolved destination, redirect chain, TLS/source data, byte count, SHA-256, object-store version ID. |
+| `FETCHING -> FETCH_FAILED` | Failure reason (policy block, timeout, size limit), attempted destination. |
+| `ACQUIRED -> ANALYSING` | Job dispatch record for the analysis worker. |
+| `ANALYSING -> ANALYSIS_PASSED` | File type, checksum verdict, ClamAV verdict, YARA verdict, path-specific evidence, scanner versions. |
+| `ANALYSING -> ANALYSIS_FAILED` | The failing control and its verdict/report. |
+| `ANALYSING -> INCONCLUSIVE` | Which control could not complete, and why (timeout, scanner unavailable). |
+| `ANALYSIS_PASSED -> COOLING` | Cooling-off window start timestamp and configured duration. |
+| `COOLING -> PENDING_PROMOTION` | Cooling-off completion timestamp, or explicit demo override with reason. |
+| `PENDING_PROMOTION -> APPROVED` | Promotion approver, immutable evidence bundle ID, approved object location, expiry date. |
+| `PENDING_PROMOTION -> PROMOTION_REJECTED` | Promotion reviewer identity, rejection reason. |
+| `APPROVED -> SUSPENDED` | Recheck finding, analyst decision, rule/feed version, affected object hash. |
+| `SUSPENDED -> RECALLED` | Analyst confirmation, recall reason, consumer-block/notification record. |
+| `APPROVED -> EXPIRED` | Expiry date reached, scheduled expiry-check job run ID. |
+
+### Mapping to the formal lifecycle
+
+The POC lifecycle is deliberately smaller than the 19-state formal model. Every divergence is listed here rather than left implicit, so the two documents can be compared directly instead of a reader having to guess whether a difference is intentional.
+
+| POC state | Formal state | Note |
+|---|---|---|
+| `DRAFT` | *(none)* | POC-only implementation state for an unsubmitted request. The formal model starts at `REQUESTED`, the first durable record. |
+| `REQUESTED` | `REQUESTED` | Same. |
+| `APPROVED_TO_FETCH` | `APPROVED_TO_FETCH` | Same. |
+| `FETCHING` | *(folded into the `APPROVED_TO_FETCH -> ACQUIRED` transition)* | POC-only implementation state. A real fetch worker needs an "in flight" state to make retries idempotent; the formal model treats the fetch as a single atomic transition. |
+| `ACQUIRED` | `ACQUIRED` | Same. |
+| `FETCH_FAILED` | `FETCH_FAILED` | Same. |
+| `ANALYSING` | `ANALYSING` | Same. |
+| `ANALYSIS_PASSED` | *(PASS outcome of `ANALYSING`, not a distinct formal state)* | POC-only implementation state, giving the demo portal an explicit UI status between "still analysing" and "in cooling." |
+| `ANALYSIS_FAILED` | `ANALYSIS_FAILED` | Same. |
+| `INCONCLUSIVE` | `INCONCLUSIVE` | Same. |
+| `COOLING` | `COOLING` | Same. |
+| `PENDING_PROMOTION` | `PENDING_PROMOTION` | Same name as of this revision (an earlier draft of this document used `READY_FOR_PROMOTION`). |
+| `APPROVED` | `APPROVED` | Same. |
+| `PROMOTION_REJECTED` | `PROMOTION_REJECTED` | Same name as of this revision (an earlier draft reused `REJECTED` for both intake rejection and promotion rejection, which loses information the formal model keeps distinct — a promotion decline after passing every automated gate is a different audit fact than never being approved to fetch at all). |
+| `SUSPENDED` | `SUSPENDED` | Same. |
+| `RECALLED` | `RECALLED` | Same. |
+| `EXPIRED` | `EXPIRED` | Same; the POC treats this as a dead end (see below). |
+| *(not demonstrated)* | `TESTING` / `TEST_FAILED` | **Explicitly out of scope for the POC.** Stage 8's isolated test pipeline is a separate environment from Stage 4/5/6 analysis in the formal model. The POC folds a lightweight functional check into `ANALYSING` instead of standing up a distinct isolated test environment — add this back if a future demo needs to prove Stage 8 specifically. |
+| *(not demonstrated)* | `RETIRED` | **Explicitly out of scope for the POC.** Voluntary retirement/supersession isn't needed to prove the control flow. |
+| *(not demonstrated)* | `RENEWAL_REQUESTED` | **Explicitly out of scope for the POC.** The POC's `EXPIRED` state has no renewal path; the formal renewal-without-refetch workflow isn't demonstrated. |
 
 ## Deployment topology
 
@@ -237,7 +294,9 @@ Recommended VM controls:
 
 The figures below are planning estimates for a low-concurrency demonstration, not production capacity guarantees. Scanner memory and storage depend heavily on artifact size and whether Dependency-Track or a dynamic sandbox is enabled.
 
-### Containerized all-in-one host
+**These profiles size a dedicated host** — a bare Linux machine or VM running nothing but this stack. A laptop running Docker Desktop for the demo is a different sizing problem: Docker Desktop itself has overhead on top of the containers, and the host OS and normal day-to-day applications (browser, IDE, video call software) are competing for the same RAM, not sitting on a separate machine. See "Docker Desktop on a laptop" immediately below for that specific case, which directly answers "will this fit on 16 GB / 32 GB."
+
+### Containerized all-in-one dedicated host
 
 | Profile | vCPU | RAM | Storage | Suitable for |
 |---|---:|---:|---:|---|
@@ -245,7 +304,56 @@ The figures below are planning estimates for a low-concurrency demonstration, no
 | Recommended demo | 10-12 | 24-32 GB | 150-250 GB SSD | Adds Syft/Grype, optional Dependency-Track, observability, concurrent scans. |
 | Extended lab | 16+ | 48-64 GB | 300-500 GB SSD | Adds larger artifacts, multiple workers, Linux sandbox, and more retained scan data. |
 
-A laptop with 16 GB RAM can run the minimal profile if optional services are stopped and scans are serialized. A 24-32 GB host gives a substantially smoother demonstration.
+### Docker Desktop on a laptop: does it fit on 16 GB or 32 GB?
+
+**16 GB laptop: yes, but only the stripped-down `core` + `scan` profiles, with nothing else running.** It is tight, not comfortable — expect to close your browser and IDE while the demo runs, and expect to run scans one at a time rather than concurrently. This is not the profile to use if you also need Teams/Zoom, Slack, or a heavy IDE open during the demo.
+
+**32 GB laptop: yes, comfortably, including `scan` and `sca` (Syft/Grype), with headroom left over** for the host OS and normal multitasking. This is the tier the existing "Recommended demo" row above assumes, minus the dedicated-host assumption.
+
+The gap between the two is Docker Desktop's own overhead plus the fact that a laptop's RAM is shared with everything else running on it, not reserved for the stack the way a dedicated host's RAM is:
+
+| Budget line | 16 GB laptop | 32 GB laptop |
+|---|---:|---:|
+| Host OS + normal background apps | ~5-6 GB | ~6-8 GB |
+| Docker Desktop engine overhead (WSL2 utility VM on Windows, or the lightweight VM on macOS) | ~1.5-2 GB | ~1.5-2 GB |
+| **Remaining for containers** | **~8-9 GB** | **~22-24 GB** |
+| Actual container footprint (`core` + `scan`, serialized, no SCA/observability/sandbox) | ~6.5-7 GB | ~6.5-7 GB |
+| Actual container footprint (`core` + `scan` + `sca`, light concurrency) | Does not fit | ~10-14 GB |
+
+On 16 GB, the `core` + `scan` footprint (~6.5-7 GB) just fits inside the ~8-9 GB left after host OS and Docker Desktop overhead — there is very little margin, which is why it's "tight" rather than "comfortable." Adding Syft/Grype (`sca`) pushes the peak (Grype's vulnerability DB load can spike 2-6 GB on its own) past what 16 GB can absorb alongside everything else; run Syft/Grype as one-off CLI invocations against a stopped container's mounted volume instead of as always-on services if SCA needs to be shown on a 16 GB machine, or skip that use case on 16 GB entirely.
+
+### Concrete Docker Desktop settings
+
+**Windows (WSL2 backend):** the Docker Desktop Settings → Resources memory slider is ignored unless a `.wslconfig` file also caps the WSL2 VM — without it, WSL2 will happily consume most of the host's RAM. Create or edit `%UserProfile%\.wslconfig`:
+
+```ini
+# 16 GB laptop — leave ~7 GB for Windows and normal apps
+[wsl2]
+memory=9GB
+processors=4
+swap=2GB
+
+# 32 GB laptop — leave ~10 GB for Windows and normal apps
+# memory=22GB
+# processors=8
+# swap=4GB
+```
+
+Restart WSL2 after editing (`wsl --shutdown` from a terminal, then reopen Docker Desktop) for the change to take effect.
+
+**macOS:** Docker Desktop → Settings → Resources → Advanced. Set Memory directly to the same figures (9 GB on a 16 GB Mac, 22 GB on a 32 GB Mac), CPUs to 4/8 respectively, and leave Swap at the default.
+
+**Either platform, both tiers:** set Disk image size to at least 60 GB (16 GB tier, `core`+`scan` only, small fixtures) or 120 GB (32 GB tier, with `sca` and its vulnerability database).
+
+### Recommended profile by laptop size
+
+| Laptop RAM | Compose profiles to run | What to skip |
+|---|---|---|
+| 16 GB | `core`, `scan` (serialized) | `sca`, `observe`, `directory`, dynamic-analysis VM. Close other apps during the demo. |
+| 32 GB | `core`, `scan`, `sca`; `observe` if not also running `sca` concurrently | Dynamic-analysis VM (still a separate manual VM regardless of laptop size — see "Suggested Compose profiles" above) |
+| 32 GB, dynamic-analysis segment specifically | `core` + the manual sandbox VM only, other profiles stopped | Everything else, temporarily — VM4 alone wants 8-16 GB per the VM sizing table below, which does not coexist with a full `scan`+`sca` container stack on 32 GB |
+
+A 64 GB+ machine removes the trade-offs above entirely and can run the "Extended lab" profile from the dedicated-host table, including the dynamic-analysis VM alongside the full container stack.
 
 ### Component-level estimate
 
@@ -306,7 +414,7 @@ Use Compose profiles or VM power states to keep the environment small.
 - recheck scheduler
 - dynamic-analysis VM
 
-### Suggested profiles
+### Suggested Compose profiles
 
 | Profile | Services |
 |---|---|
@@ -315,9 +423,10 @@ Use Compose profiles or VM power states to keep the environment small.
 | `sca` | Dependency-Track and its supporting services. |
 | `observe` | Prometheus, Grafana, Alertmanager. |
 | `directory` | OpenLDAP or Samba AD federation. |
-| `sandbox` | Integration adapter for an external disposable VM. |
 
-After a demo, stop `scan`, `sca`, `observe`, and `sandbox` first. Keep database and object-store volumes. Shut down the remaining core services cleanly when the environment is no longer needed.
+**Dynamic-analysis sandbox is intentionally not a Compose profile.** It is a separate, manually-managed VM (VM4 in the "VM-based topology" below), not a container, and it is not part of the core POC scope (see "Optional POC profiles" and "Not required to prove the POC" above) — start it only for the specific segment of a demo that needs it, per the manual procedure in `poc-build-runbook.md`. An earlier draft of this document listed `sandbox` alongside the Compose profiles above, which implied it was a `docker compose --profile sandbox` toggle; it isn't, and the runbook never defined Compose services for it.
+
+After a demo, stop `scan`, `sca`, and `observe` first (and power off the sandbox VM if it was started). Keep database and object-store volumes. Shut down the remaining core services cleanly when the environment is no longer needed.
 
 ## POC data model
 
@@ -405,7 +514,7 @@ For the POC, storing the bundle in the object store and its hash in PostgreSQL i
 
 **Fixture:** a valid harmless file with an intentionally incorrect expected SHA-256 in the request.
 
-**Expected outcome:** acquisition completes, the checksum control fails, state becomes `ANALYSIS_FAILED` or `REJECTED`, the object remains in quarantine, and approved download is unavailable.
+**Expected outcome:** acquisition completes, the checksum control fails, state becomes `ANALYSIS_FAILED`, the object remains in quarantine, and approved download is unavailable.
 
 ### Use case 5: malware-signature test
 
