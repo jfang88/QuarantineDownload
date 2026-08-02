@@ -24,11 +24,11 @@
 | 1.6 | 2026-08-02 | Security Architecture | Addressed `architecture-tooling-review.md` findings: added licensing/edition decision matrix; corrected NSRL, VirusTotal, Repository Firewall/evidence-database, WSUS/Update Catalog, and Dependency-Track claims; replaced blanket CAPE mandate with per-platform analysis profiles; fixed the trust-root section's own `curl \| sh` install pattern; added ML-BOM tooling for models; added model-sandbox resource limits and Stage 2 SSRF hardening; added signature-verification nuance |
 | 1.7 | 2026-08-02 | Security Architecture | Replaced the inline "Open issues for internal review" section with a pointer to the new `adr/` directory per ADR-0002 |
 
-> **8 architecture decisions are still open** and are not yet reflected as final in this document. See [`adr/README.md`](adr/README.md) for the full register, or jump to [Open decisions](#open-decisions) at the bottom of this document.
+> **9 architecture decisions are still open** and are not yet reflected as final in this document, including whether the tool choices below should be built as described, bought from commercial vendors, or partially replaced under a hybrid sourcing strategy — see [ADR-0012](adr/0012-build-vs-buy-vs-hybrid-sourcing-strategy.md) and [`enterprise-build-vs-buy-evaluation.md`](enterprise-build-vs-buy-evaluation.md). See [`adr/README.md`](adr/README.md) for the full register, or jump to [Open decisions](#open-decisions) at the bottom of this document.
 >
 > **Scope:** This document identifies the specific tools, packages, and integration points required to implement the controlled package intake architecture. It is organised by workflow stage and includes a recommended stack, alternatives, licensing notes, and integration guidance.
 >
-> **Preference:** Free, self-hosted tools are the primary recommendation. Paid and commercial options are noted separately where they offer meaningful capability advantages.
+> **Preference:** Free, self-hosted tools are the primary recommendation *within this document*. Paid and commercial options are noted separately where they offer meaningful capability advantages. This is a tooling-selection preference for a "build" implementation, not a claim that building is the right sourcing strategy — that prior question is evaluated in [`enterprise-build-vs-buy-evaluation.md`](enterprise-build-vs-buy-evaluation.md), which reaches a *hybrid* recommendation (buy mature commercial capability where it exists, build only the thin enterprise-specific control plane) still pending decision as [ADR-0012](adr/0012-build-vs-buy-vs-hybrid-sourcing-strategy.md). Read this document as "how to build the build portion," not as an argument that building is preferable to buying.
 >
 > **Platform scope:** The confirmed enterprise estate is Windows desktops, a mix of Windows and Linux servers, and Linux developer IDEs — no macOS fleet has been confirmed. Windows (Authenticode) and Linux (GPG/RPM/DEB) tooling in Stage 4b are baseline requirements. macOS (`codesign`/notarization) tooling is documented for completeness wherever it appears in this guide but is **optional, build-on-demand** — implement it only if a macOS artifact or endpoint population actually enters scope.
 >
@@ -1170,19 +1170,25 @@ Note: Stage 11b retroactive binary recheck and the AI/ML model artifact path (St
 
 ## Paid and cloud tool options
 
+**This table is a tactical "paid upgrade for one control area" list**, written from the build-first perspective of this document — it predates and is narrower than [`enterprise-build-vs-buy-evaluation.md`](enterprise-build-vs-buy-evaluation.md), which evaluates whole-platform commercial alternatives (JFrog's full Curation/AppTrust/Evidence suite, Sonatype Repository Firewall, OPSWAT MetaDefender, ReversingLabs Spectra Assure, ServiceNow, Palo Alto Prisma AIRS) against the complete lifecycle rather than one stage at a time. Two rows below (repository/SCA and CMDB) name products that document also covers in far more depth — treat that document as authoritative on vendor capability and this table as authoritative on "which specific paid tier plugs into which specific stage of the build-path pipeline described in this guide." The other rows (dynamic sandbox, SIEM, egress proxy/CASB) are control areas the build-vs-buy evaluation doesn't cover in the same depth, since they're general security infrastructure rather than artifact-ingress-specific.
+
 | Control area | Paid tool | Differentiator vs. free option |
 |---|---|---|
-| Repository + SCA | **JFrog Artifactory Pro + Xray** | Multi-site replication, SBOM policy engine, native SCA |
+| Repository + SCA | **JFrog Artifactory Pro + Xray**, or the fuller **JFrog Curation/AppTrust/Evidence** platform | Multi-site replication, SBOM policy engine, native SCA; Curation adds pre-download policy blocking at the proxy stage — see `enterprise-build-vs-buy-evaluation.md` § 7.1 |
+| Repository + SCA | **Sonatype Repository Firewall + Nexus + Lifecycle** | Proxy-stage quarantine and component intelligence for open-source ecosystems — see `enterprise-build-vs-buy-evaluation.md` § 7.2 |
 | SCA / SBOM | **FOSSA** | Attorney-reviewed license database, SBOM export for procurement |
 | SCA / SBOM | **Anchore Enterprise** | Commercial Syft + Grype with policy management and SSO |
 | SCA / SBOM | **Snyk** | Developer-first IDE and CI integration, strong remediation guidance |
 | Binary recheck / threat intel | **ReversingLabs TitaniumCloud** | Hash reputation, file analysis, and supply chain attack intelligence at commercial scale; replaces or augments VT + MalwareBazaar |
 | Binary recheck / threat intel | **Recorded Future** | Threat intelligence correlation including supply chain attack campaigns; IoC feeds for Stage 11b targeted recheck |
+| Proprietary final-binary assurance | **ReversingLabs Spectra Assure** | Analyses the final compiled binary without source, independent of the hash-reputation lookup above — a different ReversingLabs product line covering tampering/composition analysis and ServiceNow-integrated onboarding; see `enterprise-build-vs-buy-evaluation.md` § 7.4 |
+| General file/software ingress | **OPSWAT MetaDefender MFT / Core** | Multi-engine scanning, supervised release workflow, and archive/DLP handling for arbitrary files this guide's ClamAV/YARA path doesn't natively cover at enterprise scale — see `enterprise-build-vs-buy-evaluation.md` § 7.3 |
+| AI/ML model security | **Palo Alto Prisma AIRS AI Model Security** | Deserialization/backdoor/format scanning across Hugging Face, S3, and registry sources, beyond this guide's format-allowlist-plus-pickle-scan approach — see `enterprise-build-vs-buy-evaluation.md` § 7.6 |
 | Dynamic sandbox | **ANY.RUN** | Interactive browser-based sandbox; paid tiers for private analysis |
 | Dynamic sandbox | **Joe Sandbox** | Deep static and dynamic analysis with YARA integration |
 | Egress proxy / CASB | **Zscaler Internet Access** | Cloud-native zero-trust proxy, dep-confusion rules, DLP |
 | Egress proxy | **Palo Alto Networks NGFW** | On-premises NGFW with URL filtering and App-ID |
-| CMDB | **ServiceNow** | Full CMDB with ITSM integration, SLA, automated discovery, publisher cert management |
+| CMDB / ITSM | **ServiceNow** | Full CMDB with ITSM integration, SLA, automated discovery, publisher cert management; also the request/approval/business-onboarding role described in `enterprise-build-vs-buy-evaluation.md` § 7.5, well beyond CMDB alone |
 | SIEM | **Splunk** | Centralised log analysis, correlation rules, and recall alerting |
 | SIEM | **Microsoft Sentinel** | Cloud-native SIEM; integrates with Defender for DevOps and Intune |
 
@@ -1322,7 +1328,7 @@ flowchart TB
 
 ## Open decisions
 
-Undecided questions are tracked as **Architecture Decision Records** in [`adr/README.md`](adr/README.md), which is the single register for both this guide and `package-intake-architecture.md` — status and titles are not repeated here to avoid the two-copies problem ADR-0002 exists to solve. As of this revision: **8 open, 3 decided.**
+Undecided questions are tracked as **Architecture Decision Records** in [`adr/README.md`](adr/README.md), which is the single register for both this guide and `package-intake-architecture.md` — status and titles are not repeated here to avoid the two-copies problem ADR-0002 exists to solve. As of this revision: **9 open, 3 decided.**
 
 What this table adds beyond the register is purely tooling-specific: which rollout item each open ADR blocks, so Phase 6/7 execution doesn't get ahead of a decision it depends on.
 
@@ -1336,5 +1342,6 @@ What this table adds beyond the register is purely tooling-specific: which rollo
 | [0009](adr/0009-alert-tuning-ownership-and-cadence.md) Alert-tuning cadence | Phase 8 Hardening |
 | [0010](adr/0010-control-id-taxonomy-and-traceability-matrix.md) Control-ID taxonomy | Whole document — explicitly deferred, blocks nothing currently scheduled |
 | [0011](adr/0011-backup-rpo-rto-targets.md) Backup RPO/RTO targets | Phase 1 rollout (Nexus, CMDB, recheck datastore backup config) |
+| [0012](adr/0012-build-vs-buy-vs-hybrid-sourcing-strategy.md) Build-vs-buy-vs-hybrid sourcing strategy | **Every phase in this document.** If Buy or Hybrid is selected, the tool-by-tool recommendations below (Syft/Grype, ClamAV/YARA, CAPE, GitLab CE, and most of the "Recommended stack") are candidates to be partially replaced by commercial product, not a settled implementation plan — see `enterprise-build-vs-buy-evaluation.md`. |
 
-Close these out with a recorded decision (updating the ADR's `Status` to `Accepted` and filling in its Decision Outcome, then moving it to the "Decided" table in `adr/README.md`) before or during the rollout window it blocks.
+Close these out with a recorded decision (updating the ADR's `Status` to `Accepted` and filling in its Decision Outcome, then moving it to the "Decided" table in `adr/README.md`) before or during the rollout window it blocks. **Resolve ADR-0012 first** — it's the only one that can invalidate rather than just refine the rollout plan below.

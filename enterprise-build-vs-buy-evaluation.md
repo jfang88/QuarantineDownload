@@ -5,15 +5,24 @@
 | Field | Value |
 |---|---|
 | Document title | Enterprise Artifact Ingress: Build-versus-Buy Evaluation |
-| Version | 1.0 |
+| Version | 1.1 |
 | Status | Draft for architecture and procurement review |
 | Owner | Security Architecture |
 | Last updated | 2026-08-02 |
 | Related documents | [`package-intake-architecture.md`](package-intake-architecture.md), [`solution-architecture-tooling.md`](solution-architecture-tooling.md), [`adr/README.md`](adr/README.md) |
 
+### Revision history
+
+| Version | Date | Author | Summary of changes |
+|---|---|---|---|
+| 1.0 | 2026-08-02 | Security Architecture | Initial evaluation — requirements, risks, build/buy/hybrid comparison, vendor capability landscape, solution patterns, procurement tests, TCO model, recommended direction |
+| 1.1 | 2026-08-02 | Security Architecture | Linked this evaluation's recommendation to a formal decision record ([ADR-0012](adr/0012-build-vs-buy-vs-hybrid-sourcing-strategy.md)), since the "hybrid" direction in § 13 is this document's analysis, not yet a ratified decision |
+
 ## Purpose
 
 This document evaluates how an enterprise can implement the controlled software and file ingress requirements described in this repository. It is not a proof-of-concept plan and does not assume that the organisation should build a custom platform.
+
+**This document's recommendation is tracked as [ADR-0012](adr/0012-build-vs-buy-vs-hybrid-sourcing-strategy.md)**, currently `Proposed`. Until that ADR is `Accepted`, treat `solution-architecture-tooling.md`'s detailed self-hosted tool recommendations as the implementation plan for a "build" or "the build portion of a hybrid" approach specifically — not as evidence that building was already decided to be the right sourcing strategy.
 
 The decision is a **build-versus-buy-versus-integrate** decision:
 
