@@ -54,3 +54,7 @@ The architecture requires that Nexus tag editing, CMDB trust-register edits, YAR
 ## Consequences
 
 *To be completed once a decision is recorded.* At minimum: whichever option is chosen should be implemented using the same enforcement pattern chosen for the Stage 9 promotion gate (see the licensing/edition matrix), not a second, differently-designed mechanism.
+
+## Sources
+
+The GitLab CE approval-enforcement gap this ADR's Option B works around was independently verified against [GitLab Docs — Merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/) — see `package-intake-architecture.md`'s References section for the verification record.

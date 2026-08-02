@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Document title | Package Intake POC Deployment Plan |
-| Version | 1.1 |
+| Version | 1.2 |
 | Status | Draft for review |
 | Owner | Security Architecture |
 | Last updated | 2026-08-02 |
@@ -16,6 +16,7 @@
 |---|---|---|---|
 | 1.0 | 2026-08-02 | Security Architecture | Initial POC deployment plan — scope, identity model, topology, sizing, use cases, acceptance criteria |
 | 1.1 | 2026-08-02 | Security Architecture | Aligned the POC lifecycle state names with `package-intake-architecture.md`'s formal state machine (ADR-0003) and added an explicit scope-cut mapping; completed the evidence-by-transition table; clarified the sandbox profile is a manual, separately-wired VM rather than a Compose profile; noted the portal/model-registry choices are demo conveniences, not resolutions of ADR-0006/ADR-0007; added a true minimal profile sized for a 16 GB Docker Desktop laptop alongside the existing 32 GB "recommended demo" tier |
+| 1.2 | 2026-08-02 | Security Architecture | Added a References section distinguishing claims independently verified against a live source this session (Docker Desktop/WSL2 memory behavior, OWASP SSRF ranges, EICAR) from claims not re-checked |
 
 ## Document purpose
 
@@ -687,3 +688,23 @@ Use Camunda, Temporal, n8n, or a similar engine for lifecycle orchestration whil
 Build the first demonstration as a containerized, offline-first POC using Keycloak, a small portal, PostgreSQL, an S3-compatible object store, a hardened fetch worker, ClamAV, YARA, and optional Syft/Grype. Serve all demonstration artifacts from a local mock source. Add Dependency-Track and a disposable sandbox only after the core request-to-recall loop is reliable.
 
 This gives the fastest path to a credible demonstration while preserving the reference architecture's most important ideas: independent identities, controlled acquisition, exact-byte evidence, path-specific analysis, fail-closed promotion, approved-only consumption, and post-approval recall.
+
+---
+
+## References
+
+Per claim: independently checked against a live source, or not verified this session. This document's most testable claims are the resource-sizing numbers in "Docker Desktop on a laptop" and the security controls in "Security controls worth preserving even in the POC" — both are backed below.
+
+### Verified against a live source this session (2026-08-02)
+
+| Claim in this document | Source | What was confirmed |
+|---|---|---|
+| Docker Desktop's Settings → Resources memory slider does not control the WSL2 backend's actual VM memory allocation; a `%UserProfile%\.wslconfig` file with a `[wsl2]` section (`memory=`, `processors=`, `swap=`) is required, and changes need `wsl --shutdown` to take effect | [Microsoft Learn — Advanced settings configuration in WSL](https://learn.microsoft.com/en-us/windows/wsl/wsl-config) | Confirmed the file location, section syntax, and the requirement to fully restart the WSL2 VM for changes to apply — exactly the mechanism the "Docker Desktop on a laptop" sizing section depends on |
+| The recommended SSRF blocklist ranges (RFC 1918 private ranges, loopback `127.0.0.0/8`, link-local/metadata-service `169.254.169.254`) and "disable redirect following" are standard SSRF defenses | [OWASP — SSRF Prevention Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html) | Confirmed the exact IP ranges and the redirect-revalidation recommendation behind this document's fetch-worker hardening requirements and the SSRF use case (use case 7) |
+| The EICAR test file is a standardized, safe, non-malicious antivirus test signature that scanners like ClamAV are expected to detect | [EICAR — Anti-Malware Testfile](https://eicar.org/download-anti-malware-testfile/) | Confirmed EICAR's own description of the file's purpose and safety, behind the "use case 5" malware-detection fixture |
+
+### Not independently verified in this pass
+
+- Keycloak's specific realm/role/OIDC-client configuration model described in "Identity and access design" (Keycloak's open-source/CNCF status was confirmed via live fetch elsewhere in this repository's References, but the specific realm-configuration claims here were not re-checked against Keycloak's admin documentation)
+- MinIO or other S3-compatible object storage's specific versioning/object-lock behavior referenced in "Bootstrap PostgreSQL and object storage"
+- Exact RAM/CPU figures in the component-level and VM-sizing tables beyond the Docker Desktop overhead figures verified above — these are the author's planning estimates (as the document itself already states), not vendor-published numbers

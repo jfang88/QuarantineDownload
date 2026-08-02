@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Document title | Enterprise Artifact Ingress: Build-versus-Buy Evaluation |
-| Version | 1.1 |
+| Version | 1.2 |
 | Status | Draft for architecture and procurement review |
 | Owner | Security Architecture |
 | Last updated | 2026-08-02 |
@@ -17,6 +17,7 @@
 |---|---|---|---|
 | 1.0 | 2026-08-02 | Security Architecture | Initial evaluation — requirements, risks, build/buy/hybrid comparison, vendor capability landscape, solution patterns, procurement tests, TCO model, recommended direction |
 | 1.1 | 2026-08-02 | Security Architecture | Linked this evaluation's recommendation to a formal decision record ([ADR-0012](adr/0012-build-vs-buy-vs-hybrid-sourcing-strategy.md)), since the "hybrid" direction in § 13 is this document's analysis, not yet a ratified decision |
+| 1.2 | 2026-08-02 | Security Architecture | Added a verification note to § 15 recording which vendor citations were independently spot-checked during the repository-wide references review, and which were carried as originally cited |
 
 ## Purpose
 
@@ -785,6 +786,8 @@ Adopt a **hybrid enterprise architecture** as the working recommendation.
 10. Implement the smallest integration layer that preserves enterprise lifecycle and recall requirements.
 
 ## 15. References
+
+**Verification note (2026-08-02):** two of the vendor-documentation links below — the Palo Alto Prisma AIRS AI Model Security page and the JFrog Curation rollout overview — were independently spot-checked against their live content during the repository-wide references review, and both matched the capability claims made about them in § 7. The remaining links in this section were not re-fetched in that pass; they're carried as originally cited when this document was authored. Treat them as good-faith citations rather than independently re-confirmed ones until checked.
 
 ### Standards and guidance
 

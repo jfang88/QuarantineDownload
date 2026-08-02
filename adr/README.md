@@ -6,6 +6,8 @@ This directory tracks the decisions behind the package intake architecture — b
 
 Each ADR follows a lightweight MADR-style template: Status, Context, Decision Drivers, Considered Options (with pros/cons for each), Decision Outcome, and Consequences. See any file below for the pattern.
 
+Most ADRs here are organizational/process judgment calls (which enforcement mechanism, which cadence, which registry) rather than external factual claims, so they don't carry their own References section. Where an ADR does rely on a specific external fact — for example, ADR-0004's VirusTotal Public API terms — that fact is verified in the citing main document's own **References** section (`package-intake-architecture.md` or `solution-architecture-tooling.md`), not duplicated here. ADR-0012 is the exception: it summarizes `enterprise-build-vs-buy-evaluation.md`, which carries its own extensive references.
+
 **Status values used in this directory:**
 
 | Status | Meaning |

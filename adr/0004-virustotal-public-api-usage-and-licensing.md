@@ -68,3 +68,7 @@ The architecture uses VirusTotal's Public API (free, 500 lookups/day) as the def
 ## Consequences
 
 *To be completed once a decision is recorded.* At minimum: whichever option is chosen, the Stage 11b rate-limit budgeting logic and its "Open issues" framing in the architecture/tooling documents should be updated to reference this ADR instead of restating the options.
+
+## Sources
+
+The ToS restriction and 500/day rate limit this ADR is built on were independently verified against [VirusTotal Docs — Public vs Premium API](https://docs.virustotal.com/reference/public-vs-premium-api) — see `package-intake-architecture.md`'s References section for the verification record.
