@@ -24,6 +24,8 @@
 | 1.6 | 2026-08-02 | Security Architecture | Addressed `architecture-tooling-review.md` findings: added licensing/edition decision matrix; corrected NSRL, VirusTotal, Repository Firewall/evidence-database, WSUS/Update Catalog, and Dependency-Track claims; replaced blanket CAPE mandate with per-platform analysis profiles; fixed the trust-root section's own `curl \| sh` install pattern; added ML-BOM tooling for models; added model-sandbox resource limits and Stage 2 SSRF hardening; added signature-verification nuance |
 | 1.7 | 2026-08-02 | Security Architecture | Replaced the inline "Open issues for internal review" section with a pointer to the new `adr/` directory per ADR-0002 |
 
+> **8 architecture decisions are still open** and are not yet reflected as final in this document. See [`adr/README.md`](../adr/README.md) for the full register, or jump to [Open decisions](#open-decisions) at the bottom of this document.
+>
 > **Scope:** This document identifies the specific tools, packages, and integration points required to implement the controlled package intake architecture. It is organised by workflow stage and includes a recommended stack, alternatives, licensing notes, and integration guidance.
 >
 > **Preference:** Free, self-hosted tools are the primary recommendation. Paid and commercial options are noted separately where they offer meaningful capability advantages.
@@ -1320,19 +1322,19 @@ flowchart TB
 
 ## Open decisions
 
-Undecided questions are tracked as **Architecture Decision Records** in [`adr/`](../adr/README.md) rather than as inline text in this section — see [ADR-0002](../adr/0002-adopt-architecture-decision-records.md). The ADRs below are shared with `package-intake-architecture.md`; the tooling-specific framing that used to live in this section (which Phase 6/7 rollout item each affects) now lives inside each ADR's Context, so it isn't duplicated in both documents.
+Undecided questions are tracked as **Architecture Decision Records** in [`adr/README.md`](../adr/README.md), which is the single register for both this guide and `package-intake-architecture.md` — status and titles are not repeated here to avoid the two-copies problem ADR-0002 exists to solve. As of this revision: **8 open, 3 decided.**
 
-| ADR | Question | Affects |
-|---|---|---|
-| [0001](../adr/0001-two-document-split.md) | Keep this guide and the architecture document separate, or merge them? | Repository structure |
-| [0002](../adr/0002-adopt-architecture-decision-records.md) | Adopt ADRs in place of this section's previous inline format | Repository structure |
-| [0003](../adr/0003-adopt-artifact-lifecycle-state-machine.md) | Adopt the formal lifecycle state machine | Evidence database schema (Stage 3) |
-| [0004](../adr/0004-virustotal-public-api-usage-and-licensing.md) | When does the paid VirusTotal tier become mandatory? | Phase 7, item 37 |
-| [0005](../adr/0005-push-remediation-coverage-boundary.md) | How far does automated push remediation reach? | Phase 7, item 38 |
-| [0006](../adr/0006-segregation-of-duties-enforcement-mechanism.md) | GitLab MR gate vs. native RBAC for pipeline-admin SoD | Phase 7, item 39 |
-| [0007](../adr/0007-model-registry-tooling-choice.md) | MLflow vs. Nexus tags plus CMDB for the model registry | Phase 6, item 29 |
-| [0008](../adr/0008-export-control-and-legal-review-routing.md) | Export control / legal review routing | Stage 1 intake |
-| [0009](../adr/0009-alert-tuning-ownership-and-cadence.md) | Alert-tuning ownership and cadence | Phase 8 Hardening |
-| [0010](../adr/0010-control-id-taxonomy-and-traceability-matrix.md) | Adopt a normative control-ID taxonomy and traceability matrix? | Whole document — explicitly deferred |
+What this table adds beyond the register is purely tooling-specific: which rollout item each open ADR blocks, so Phase 6/7 execution doesn't get ahead of a decision it depends on.
 
-Close these out with a recorded decision (updating the ADR's `Status` to `Accepted` and filling in its Decision Outcome) before or during the Phase 7 rollout window they affect.
+| Open ADR | Blocks |
+|---|---|
+| [0004](../adr/0004-virustotal-public-api-usage-and-licensing.md) VirusTotal licensing | Phase 7, item 37 |
+| [0005](../adr/0005-push-remediation-coverage-boundary.md) Push-remediation reach | Phase 7, item 38 |
+| [0006](../adr/0006-segregation-of-duties-enforcement-mechanism.md) SoD enforcement mechanism | Phase 7, item 39 |
+| [0007](../adr/0007-model-registry-tooling-choice.md) Model registry tooling | Phase 6, item 29 |
+| [0008](../adr/0008-export-control-and-legal-review-routing.md) Export control routing | Stage 1 intake (no rollout item yet) |
+| [0009](../adr/0009-alert-tuning-ownership-and-cadence.md) Alert-tuning cadence | Phase 8 Hardening |
+| [0010](../adr/0010-control-id-taxonomy-and-traceability-matrix.md) Control-ID taxonomy | Whole document — explicitly deferred, blocks nothing currently scheduled |
+| [0011](../adr/0011-backup-rpo-rto-targets.md) Backup RPO/RTO targets | Phase 1 rollout (Nexus, CMDB, recheck datastore backup config) |
+
+Close these out with a recorded decision (updating the ADR's `Status` to `Accepted` and filling in its Decision Outcome, then moving it to the "Decided" table in `adr/README.md`) before or during the rollout window it blocks.
