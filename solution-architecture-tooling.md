@@ -6,7 +6,7 @@
 | Field | Value |
 |---|---|
 | Document title | Solution Architecture: Tooling and Implementation Guide |
-| Version | 1.5 |
+| Version | 1.7 |
 | Status | Draft for review |
 | Owner | Security Architecture |
 | Last updated | 2026-08-02 |
@@ -21,6 +21,8 @@
 | 1.3 | 2026-04-23 | Security Architecture | Added Stage 11b retroactive binary recheck tooling; added binary authentication tools (Authenticode, NSRL, MalwareBazaar, VirusTotal hash); updated Stage 4 to split 4a/4b; updated tooling summary table; updated integration wiring diagram; added publisher certificate thumbprint register to CMDB requirements; updated phased rollout |
 | 1.4 | 2026-08-01 | Security Architecture | Added Stage 4c/5c tooling for AI/ML model artifacts (Path C); added macOS and Linux platform signing tools alongside Authenticode; added pipeline tooling supply-chain pinning practices; added push-remediation tooling for Stage 10; added Stage 11b rate-limit budgeting, false-positive suppression schema, and pipeline-admin segregation of duties; added backup/DR tooling; added Phase 7 for Path C rollout; added "Open issues for internal review" section mirrored from the architecture document |
 | 1.5 | 2026-08-02 | Security Architecture | Scoped macOS code-signing tooling as optional/build-on-demand based on confirmed enterprise estate (Windows desktops, mixed Windows/Linux servers, Linux developer IDEs); moved the macOS rollout item out of the Phase 7 critical path; Windows (Authenticode) and Linux (GPG/RPM/DEB) tooling remain baseline |
+| 1.6 | 2026-08-02 | Security Architecture | Addressed `architecture-tooling-review.md` findings: added licensing/edition decision matrix; corrected NSRL, VirusTotal, Repository Firewall/evidence-database, WSUS/Update Catalog, and Dependency-Track claims; replaced blanket CAPE mandate with per-platform analysis profiles; fixed the trust-root section's own `curl \| sh` install pattern; added ML-BOM tooling for models; added model-sandbox resource limits and Stage 2 SSRF hardening; added signature-verification nuance |
+| 1.7 | 2026-08-02 | Security Architecture | Replaced the inline "Open issues for internal review" section with a pointer to the new `adr/` directory per ADR-0002 |
 
 > **Scope:** This document identifies the specific tools, packages, and integration points required to implement the controlled package intake architecture. It is organised by workflow stage and includes a recommended stack, alternatives, licensing notes, and integration guidance.
 >
@@ -75,7 +77,7 @@ This document's "self-hosted free" framing is a starting point, not a guarantee 
 | **GitLab CE** (request portal, promotion gate) | Merge request approvals are optional and advisory — CE does not block a merge for missing approvals, does not prevent an author approving their own change, and does not reset approvals on new commits. This architecture's Stage 9 promotion gate and segregation-of-duties requirement are **not enforced** on CE as literally described. | GitLab Premium/Ultimate adds required approval rules, protected-branch approval enforcement, prevention of author self-approval, and approval reset after new commits — a native, vendor-supported enforcement path. | Choose one deliberately: (a) licence Premium/Ultimate and configure required approvals as a true gate, or (b) stay on CE and replace "GitLab MR approval" with a protected-branch CI status check that calls an external approval-record service and only allows a restricted service account to merge after it passes (see Stage 9 and control C1-equivalent fix below). Do not describe native CE approvals as a production control either way. |
 | **Nexus Repository** (quarantine repo, approved repos) | Nexus Repository OSS covers basic hosted/proxy/group repositories but lacks staging workflows, several blob store and HA options, and enterprise identity integration that this architecture's Stage 3/9/10 promotion and replication requirements assume. Exact feature boundaries between OSS and Pro should be verified against Sonatype's current edition comparison, not assumed from this table. | Nexus Repository Pro adds staging repositories, additional blob store backends, LDAP/SAML integration, and HA clustering. | Nexus Pro is effectively required for this architecture's promotion-state and HA requirements regardless of the quarantine question below — budget for it as a baseline cost, not an optional upgrade. |
 | **Sonatype Repository Firewall** (component quarantine and intelligence) | Not included with Nexus Repository Pro. Repository Firewall is a separately licensed capability (via IQ Server) that quarantines components fetched through *proxy* repositories against Sonatype's component intelligence. It does not, by itself, provide a generic immutable evidence store for arbitrary installers, firmware, or model files that don't come through an ecosystem proxy — see "Repository Firewall vs. the enterprise intake evidence store" below. | Automated quarantine-on-fetch and component risk intelligence for proxied open-source ecosystems. | Licence Repository Firewall only if automated proxy-layer quarantine for open-source ecosystems is in scope; it is not a substitute for, and should not be budgeted as covering, the custom intake evidence store this architecture needs for proprietary/firmware/model artifacts. |
-| **VirusTotal** (hash reputation lookups) | Public API: 500 lookups/day, and its terms restrict commercial/automated business-workflow use — see the VirusTotal-specific caveats above and in "Open issues for internal review." | Premium API: higher/bulk rate limits, licensed for commercial automation. | Budget for Premium once inventory growth or the ToS question forces the issue — track both triggers, not just the rate limit. |
+| **VirusTotal** (hash reputation lookups) | Public API: 500 lookups/day, and its terms restrict commercial/automated business-workflow use — see the VirusTotal-specific caveats above and [ADR-0004](../adr/0004-virustotal-public-api-usage-and-licensing.md). | Premium API: higher/bulk rate limits, licensed for commercial automation. | Budget for Premium once inventory growth or the ToS question forces the issue — track both triggers, not just the rate limit. |
 | **CAPE Sandbox** | Free/GPL and self-hosted, but it detonates samples inside Windows guest VMs — those guest OS licences are a real, easy-to-miss cost that "free tooling" framing can obscure. Confirm Windows guest licensing (volume licensing, MSDN/Visual Studio subscription, or equivalent) is budgeted before treating CAPE as a zero-cost control. | N/A — CAPE itself has no paid tier; commercial sandboxes (ANY.RUN, Joe Sandbox) are the paid alternative, priced to include guest OS licensing. | Budget Windows guest OS licensing explicitly alongside CAPE infrastructure costs; do not list CAPE as "free" without that caveat. |
 | **OWASP Dependency-Track** | Fully free (Apache 2.0) at every tier; no feature gate relevant to this architecture. | Sonatype Lifecycle is the commercial alternative, not a paid tier of Dependency-Track — it replaces rather than upgrades it. | No licensing decision needed unless evaluating Sonatype Lifecycle as a full replacement for Syft + Grype + Dependency-Track. |
 
@@ -480,7 +482,7 @@ Model licenses are a distinct compliance surface from OSS SPDX/CycloneDX license
 
 **Nexus tags plus CMDB (default, no new system):** consistent with the Path B pattern; sufficient for organisations primarily consuming pre-trained models rather than doing extensive in-house fine-tuning.
 
-**MLflow Model Registry (Apache 2.0, self-hosted):** if the organisation already runs a fine-tuning or training pipeline, a dedicated model registry gives native lineage graphs (which fine-tune came from which base model, which experiment produced which checkpoint) that Nexus tags cannot represent well. This is an implementation decision — see "Open issues for internal review."
+**MLflow Model Registry (Apache 2.0, self-hosted):** if the organisation already runs a fine-tuning or training pipeline, a dedicated model registry gives native lineage graphs (which fine-tune came from which base model, which experiment produced which checkpoint) that Nexus tags cannot represent well. This is an implementation decision — see [ADR-0007](../adr/0007-model-registry-tooling-choice.md).
 
 ---
 
@@ -503,7 +505,7 @@ def check_malwarebazaar(sha256: str) -> bool:
 
 **NSRL lookup** (Stage 6 cross-check): record result in Nexus metadata, including the RDSv3 dataset version used. Not a blocking control on its own — absence from NSRL is not malicious, and presence does not certify the file is currently safe — a match is provenance evidence to weigh alongside the other Stage 6 signals, not a standalone confidence booster.
 
-**VirusTotal hash lookup** (Public API, free tier: 500 lookups/day; no file submission): safe for all artifact types including proprietary because only the SHA-256 is transmitted. Used for open-source at intake and in Stage 11b recheck for all artifact types. **Capacity flag:** Stage 11b rechecks the whole approved inventory on a recurring schedule, so the number of hashes competing for this 500/day budget only grows as more artifacts get promoted — this is not a fixed cost. The Public API's terms also restrict use in commercial/automated business workflows, which this pipeline's unattended nightly recheck arguably is, independent of whether the rate limit is ever actually hit. See "Open issues for internal review" below for the procurement/licensing decision this implies.
+**VirusTotal hash lookup** (Public API, free tier: 500 lookups/day; no file submission): safe for all artifact types including proprietary because only the SHA-256 is transmitted. Used for open-source at intake and in Stage 11b recheck for all artifact types. **Capacity flag:** Stage 11b rechecks the whole approved inventory on a recurring schedule, so the number of hashes competing for this 500/day budget only grows as more artifacts get promoted — this is not a fixed cost. The Public API's terms also restrict use in commercial/automated business workflows, which this pipeline's unattended nightly recheck arguably is, independent of whether the rate limit is ever actually hit. See [ADR-0004](../adr/0004-virustotal-public-api-usage-and-licensing.md) for the procurement/licensing decision this implies.
 
 ```python
 def check_vt_hash(sha256: str, api_key: str) -> int:
@@ -766,7 +768,7 @@ ansible-playbook remediate-recalled-artifact.yml -i recalled_hosts.ini \
   -e "artifact_hash=$RECALLED_SHA256"
 ```
 
-Where no push mechanism reaches a given system class (unmanaged workstations, air-gapped segments), the recall workflow still opens a tracked remediation ticket against the named owner with an SLA — this residual gap is one of the items in "Open issues for internal review."
+Where no push mechanism reaches a given system class (unmanaged workstations, air-gapped segments), the recall workflow still opens a tracked remediation ticket against the named owner with an SLA — this residual gap is tracked in [ADR-0005](../adr/0005-push-remediation-coverage-boundary.md).
 
 ---
 
@@ -904,7 +906,7 @@ def build_recheck_batch(inventory: list, daily_vt_budget: int = 500) -> dict:
     }
 ```
 
-Whether this budgeting is sufficient long-term, or the paid VT tier becomes necessary at a given inventory size, is an implementation decision — see "Open issues for internal review."
+Whether this budgeting is sufficient long-term, or the paid VT tier becomes necessary at a given inventory size, is an implementation decision — see [ADR-0004](../adr/0004-virustotal-public-api-usage-and-licensing.md).
 
 ### False-positive suppression
 
@@ -925,7 +927,7 @@ def should_suppress(sha256: str, signal_type: str, rule_version: str, suppressio
 
 ### Segregation of duties for the recheck job itself
 
-Scheduling configuration, rate-limit budget allocation, false-positive disposition authority, and YARA ruleset promotion (from the staging diff described under "Pipeline tooling supply chain") are restricted to a role distinct from artifact approvers. The recommended enforcement mechanism is routing all changes to this configuration through a GitLab merge request in the recheck-job's own repository, requiring a second approver — this gives a uniform, auditable trail regardless of how granular each underlying tool's native RBAC is. Whether native per-tool RBAC should additionally be configured is an implementation decision — see "Open issues for internal review."
+Scheduling configuration, rate-limit budget allocation, false-positive disposition authority, and YARA ruleset promotion (from the staging diff described under "Pipeline tooling supply chain") are restricted to a role distinct from artifact approvers. The recommended enforcement mechanism is routing all changes to this configuration through a GitLab merge request in the recheck-job's own repository, requiring a second approver — this gives a uniform, auditable trail regardless of how granular each underlying tool's native RBAC is. Whether native per-tool RBAC should additionally be configured is an implementation decision — see [ADR-0006](../adr/0006-segregation-of-duties-enforcement-mechanism.md).
 
 ### Recheck job result handling
 
@@ -1312,44 +1314,25 @@ flowchart TB
 44. Implement MinIO for long-term SBOM, sandbox report, and recheck log archiving.
 45. Review CMDB publisher trust register quarterly — update when publishers rotate certificates or keys.
 46. Review all CMDB entries quarterly to confirm owner, expiry, and deployment scope are current.
-47. Review false-positive suppression counts and canary-audit history monthly, per "Open issues for internal review."
+47. Review false-positive suppression counts and canary-audit history monthly, per [ADR-0009](../adr/0009-alert-tuning-ownership-and-cadence.md).
 
 ---
 
-## Open issues for internal review
+## Open decisions
 
-These mirror the open items in the architecture document, stated here in tooling-specific terms so the implementation team can scope Phase 6/7 work against a decided answer rather than guessing. Close these out with a recorded decision before or during Phase 7.
+Undecided questions are tracked as **Architecture Decision Records** in [`adr/`](../adr/README.md) rather than as inline text in this section — see [ADR-0002](../adr/0002-adopt-architecture-decision-records.md). The ADRs below are shared with `package-intake-architecture.md`; the tooling-specific framing that used to live in this section (which Phase 6/7 rollout item each affects) now lives inside each ADR's Context, so it isn't duplicated in both documents.
 
-### 1. VirusTotal paid tier — procurement trigger
+| ADR | Question | Affects |
+|---|---|---|
+| [0001](../adr/0001-two-document-split.md) | Keep this guide and the architecture document separate, or merge them? | Repository structure |
+| [0002](../adr/0002-adopt-architecture-decision-records.md) | Adopt ADRs in place of this section's previous inline format | Repository structure |
+| [0003](../adr/0003-adopt-artifact-lifecycle-state-machine.md) | Adopt the formal lifecycle state machine | Evidence database schema (Stage 3) |
+| [0004](../adr/0004-virustotal-public-api-usage-and-licensing.md) | When does the paid VirusTotal tier become mandatory? | Phase 7, item 37 |
+| [0005](../adr/0005-push-remediation-coverage-boundary.md) | How far does automated push remediation reach? | Phase 7, item 38 |
+| [0006](../adr/0006-segregation-of-duties-enforcement-mechanism.md) | GitLab MR gate vs. native RBAC for pipeline-admin SoD | Phase 7, item 39 |
+| [0007](../adr/0007-model-registry-tooling-choice.md) | MLflow vs. Nexus tags plus CMDB for the model registry | Phase 6, item 29 |
+| [0008](../adr/0008-export-control-and-legal-review-routing.md) | Export control / legal review routing | Stage 1 intake |
+| [0009](../adr/0009-alert-tuning-ownership-and-cadence.md) | Alert-tuning ownership and cadence | Phase 8 Hardening |
+| [0010](../adr/0010-control-id-taxonomy-and-traceability-matrix.md) | Adopt a normative control-ID taxonomy and traceability matrix? | Whole document — explicitly deferred |
 
-The rate-limit budgeting logic (Phase 7, item 37) is a scheduling mitigation, not a capacity increase, and it is mitigating a problem that gets strictly worse over time: Stage 11b rechecks the entire approved inventory on every scheduled run, so every artifact this pipeline promotes is a permanent addition to the daily VirusTotal query load. There is no steady state where the free tier "is enough" — only a longer or shorter runway before Tier 2/3 staleness becomes unacceptable. Separately, VirusTotal's Public API terms restrict commercial/business-workflow automation, which an unattended nightly enterprise recheck job plausibly is, regardless of whether the 500/day ceiling is ever actually hit.
-
-Recommend setting a concrete inventory-size trigger now (e.g., budget approval requested automatically once Tier 2/3 staleness exceeds a defined threshold, such as 7 days between rechecks) rather than discovering the ceiling in production, **and** getting a separate legal/procurement read on whether the current Public API usage pattern already needs a Premium licence on ToS grounds alone. Alternative: treat VirusTotal as Tier 1-only from the start and rely on MalwareBazaar (no meaningful rate limit) as the primary Stage 11b signal for Tier 2/3 — this reduces how fast the rate-limit problem grows but does not resolve the ToS question.
-
-### 2. Push-remediation coverage boundary
-
-`WSUS`/`Intune`/`Ansible` integrations (Phase 7, item 38) only reach systems already enrolled in one of those tools. Before building the integration, confirm what fraction of the target fleet is actually enrolled — if it's materially less than 100%, the manual-follow-up SLA process needs to be built with equal priority to the automated path, not as an afterthought.
-
-### 3. SoD enforcement — GitLab MR gate vs. native RBAC
-
-The recommended approach (Phase 7, item 39) routes all pipeline-admin changes through a GitLab merge request for a uniform audit trail. This is simpler to build than configuring native RBAC in every tool (Nexus, YARA repo, CMDB), but it only enforces separation for changes that actually go through Git-tracked configuration — a direct database edit to the CMDB trust register, for instance, would bypass it. Decide whether that residual gap needs closing with native RBAC too, or is accepted given the smaller attack surface of direct-access admin accounts.
-
-### 4. MLflow vs. Nexus tags for the model registry
-
-Phase 6 defaults to Nexus tags plus CMDB (item 29) to avoid standing up a new system before Phase 6 even starts. If the organisation is already running or planning a fine-tuning pipeline, building on Nexus tags now creates migration work later when a proper model registry becomes necessary anyway. Worth deciding this before Phase 6 starts rather than after.
-
-### 5. Export control routing
-
-Not currently modeled in any pipeline stage or script in this document. If Legal already has an export-control review process, the cheapest integration is a webhook from Stage 1 intake (GitLab issue creation) into that existing process, rather than building classification logic into this pipeline.
-
-### 6. Alert-tuning cadence tooling
-
-The `fp_suppressions` table (Phase 7, item 37) gives the data needed to track suppression counts as a metric, but no dashboard or review cadence is built for it yet. A small Grafana panel querying `fp_suppressions` and `artifact_recheck_log` by month, reviewed at the same meeting as the quarterly CMDB review, would close this with minimal additional tooling.
-
-### 7. Structural documentation improvements — deferred, not scheduled
-
-Mirrors the architecture document's item 7. The independent review recommended a normative control-ID/traceability matrix, a formal artifact lifecycle state machine, and a shift from inline "open issues" text to Architecture Decision Records. Each is a legitimate improvement but a substantially larger investment than the tooling/factual corrections made in this revision — they are logged as deferred future work here, not actioned:
-
-- **Control catalogue and traceability matrix:** would give this guide's tool choices a formal mapping back to the control IDs the architecture document would define under its own item 7a. Only worth building once that control catalogue exists to map against.
-- **Lifecycle state machine tooling:** the evidence database schema (see the licensing/edition matrix's "Per-artifact evidence database" and Stage 3) is the natural place to implement the state machine the architecture document's item 7b describes — build them together rather than the state machine first.
-- **ADRs for tooling decisions:** several items in this "Open issues for internal review" section (VirusTotal tier, model registry choice, SoD enforcement mechanism) are exactly the kind of decision an ADR is meant to record once made. Adopting ADRs would give these decisions a permanent, dated record instead of relying on this section being kept in sync with what was actually decided.
+Close these out with a recorded decision (updating the ADR's `Status` to `Accepted` and filling in its Decision Outcome) before or during the Phase 7 rollout window they affect.

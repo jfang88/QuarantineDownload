@@ -5,7 +5,7 @@
 | Field | Value |
 |---|---|
 | Document title | Enterprise Package Intake and Approved Repository Architecture |
-| Version | 1.6 |
+| Version | 1.8 |
 | Status | Draft for review |
 | Owner | Security Architecture |
 | Last updated | 2026-08-02 |
@@ -21,6 +21,8 @@
 | 1.4 | 2026-04-23 | Security Architecture | Added Stage 11b retroactive binary recheck; added binary authentication controls (Authenticode, NSRL, MalwareBazaar); updated both flowchart and sequence diagram to show recheck loop; added control objective for post-approval supply chain compromise detection |
 | 1.5 | 2026-08-01 | Security Architecture | Added Path C for AI/ML model artifacts (Stages 4c/5c); added cross-platform binary authentication (macOS, Linux) alongside Authenticode; added pipeline tooling supply-chain trust-root controls; added consumer-side remediation on recall; added recheck-job rate-limit and false-positive-suppression handling; added segregation-of-duties controls for pipeline administrators; added non-human/agentic requestor identity controls; added disaster-recovery requirements for systems of record; added "Open issues for internal review" section |
 | 1.6 | 2026-08-02 | Security Architecture | Scoped macOS binary authentication as optional/on-demand rather than a baseline requirement, based on confirmed enterprise estate composition (Windows desktops, mixed Windows/Linux servers, Linux developer IDEs — no confirmed macOS fleet); Windows and Linux platform signature verification remain baseline requirements |
+| 1.7 | 2026-08-02 | Security Architecture | Addressed `architecture-tooling-review.md` findings: corrected NSRL to RDSv3/reference-corpus semantics; corrected VirusTotal Public API ToS and rate-limit-at-scale framing; split Repository Firewall quarantine from the generic intake evidence store and introduced the evidence database; replaced blanket "mandatory CAPE" with per-platform analysis profiles and PASS/FAIL/INCONCLUSIVE/UNAVAILABLE outcomes; corrected WSUS/Update Catalog and Dependency-Track where-used claims; added CycloneDX ML-BOM for models; softened proprietary-SBOM absolutism; added model-sandbox resource-abuse limits; added SSRF hardening to Stage 2; added signature-verification nuance (per-source Linux verification, OCSP timestamp handling); renamed "silent repoint" to "mutable-source-reference drift" |
+| 1.8 | 2026-08-02 | Security Architecture | Added the formal artifact lifecycle state machine (state table, `stateDiagram-v2`, transitions/actors/evidence table, idempotency and cross-system reconciliation rules) per ADR-0003; replaced the inline "Open issues for internal review" section with a pointer to the new `adr/` directory per ADR-0002 |
 
 ---
 
@@ -322,7 +324,7 @@ VirusTotal aggregates results from 70+ AV engines. Hash-only lookups do not uplo
 - **Stage 11b is not a one-time scan — it is a recurring scan of the entire approved inventory.** Every artifact promoted through this pipeline adds a permanent line item to future recheck runs. A 500-lookup daily budget that comfortably covers a few hundred artifacts today will be exhausted well before the inventory reaches a few thousand, purely from the Tier 1 nightly rotation described in Stage 11b — independent of Stage 6 intake volume on top of it.
 - **VirusTotal's Public API terms restrict use in commercial products, services, or automated business workflows.** An enterprise intake pipeline that runs unattended, nightly, against production infrastructure is exactly the kind of automated business workflow the Public API terms are written to exclude. This is a licensing question the organisation needs to resolve, independent of whether the rate limit itself is ever hit — sustained automated use of the Public API in this architecture should be treated as a compliance gap to close, not a cost-optimisation choice to defer indefinitely.
 
-Track inventory size and daily lookup volume from the day this goes live, and treat "does the recheck job still fit inside the free tier, and are we still within the Public API's permitted use, today" as a standing question for the Stage 11b rate-limit budgeting described below and the licensing decision in "Open issues for internal review."
+Track inventory size and daily lookup volume from the day this goes live, and treat "does the recheck job still fit inside the free tier, and are we still within the Public API's permitted use, today" as a standing question for the Stage 11b rate-limit budgeting described below and the licensing decision in [ADR-0004](../adr/0004-virustotal-public-api-usage-and-licensing.md).
 
 ```python
 def check_virustotal_hash(sha256_hash: str, api_key: str) -> int:
@@ -475,6 +477,124 @@ This is treated as a distinct control surface rather than folded into Stage 4/5/
 
 ---
 
+## Artifact lifecycle state machine
+
+Per [ADR-0003](../adr/0003-adopt-artifact-lifecycle-state-machine.md), this architecture defines the artifact lifecycle as an explicit state machine rather than treating Nexus repository-group membership (`intake-quarantine` / `intake-dev-approved` / `intake-prod-approved`) as a de facto substitute for one. Repository groups map onto only a few of the states below and cannot represent "inconclusive, awaiting disposition," "suspended pending investigation," or "expired but eligible for renewal without re-fetch" — states this architecture's own stage descriptions already require but had no structural home for.
+
+**Canonical state store.** The **evidence database** (introduced under Stage 3) is the authoritative store for artifact lifecycle state. It holds an **append-only transition log** — every transition is a new row (artifact identity, from-state, to-state, trigger, actor, timestamp, evidence reference, idempotency key), never an in-place update — and the artifact's current state is a derived view (the latest transition per artifact). GitLab issue labels, Nexus repository-group membership, and CMDB status fields are **reflections** of this canonical state, written by the pipeline whenever a transition occurs; they are not independently authoritative, and a reconciliation job (see below) checks them against the evidence database for drift.
+
+**Artifact identity for state-machine purposes** is the combination of repository, format, component coordinates, asset path, and SHA-256 already used to key the evidence database — the same immutable bytes keep the same identity through every state transition. A new version (new SHA-256) is a new artifact identity with its own fresh state machine starting at `REQUESTED`, not a transition of the old one.
+
+### States
+
+| State | Meaning | Terminal? |
+|---|---|---|
+| `REQUESTED` | Stage 1 intake ticket submitted; awaiting governance decision. | No |
+| `REJECTED` | Governance denied the request, or fetch retries were exhausted. | Yes |
+| `APPROVED_TO_FETCH` | Governance approved; Stage 2 proxy authorised to fetch. | No |
+| `FETCH_FAILED` | Fetch attempt failed (source unreachable, blocked by egress/SSRF controls, transport-level hash mismatch). | No — retries or moves to `REJECTED` |
+| `ACQUIRED` | Bytes landed in the Stage 3 quarantine evidence store; canonical hash computed. | No |
+| `ANALYSING` | Stage 4/5/6 controls (integrity, SBOM/advisory/ML-BOM, malware/dynamic analysis) running. | No |
+| `ANALYSIS_FAILED` | Any mandatory control returned FAIL (hard block). | Yes |
+| `INCONCLUSIVE` | One or more analysis profiles returned INCONCLUSIVE/UNAVAILABLE (see Stage 6); awaiting human disposition. | No |
+| `COOLING` | Stage 7 cooling-off delay window in effect. | No |
+| `TESTING` | Stage 8 isolated test pipeline running. | No |
+| `TEST_FAILED` | Test pipeline failed. A remediation is a new build — new SHA-256, new `REQUESTED` lifecycle — not a re-entry of this one. | Yes |
+| `PENDING_PROMOTION` | Stage 9 evidence assembled; awaiting dual sign-off. | No |
+| `PROMOTION_REJECTED` | Promotion review declined to approve (incomplete evidence, a reviewer-identified issue) despite passing every automated gate. | Yes |
+| `APPROVED` | Promoted to the Final Approved Repository; consumable by Stage 10 consumers. | No |
+| `SUSPENDED` | A Stage 11a/11b signal flagged this artifact for investigation; new consumption blocked pending disposition, but not yet a confirmed recall. | No |
+| `RECALLED` | Confirmed post-approval compromise (Stage 11b FAIL-class hit) or investigation-confirmed compromise from `SUSPENDED`. Push remediation triggered per Stage 10. | Yes |
+| `EXPIRED` | Governing approval's expiry date passed without renewal. | No — renewal or stays expired |
+| `RENEWAL_REQUESTED` | Named owner has requested renewal of an expired approval; bytes are unchanged and already verified, so this does not re-enter `ACQUIRED`/`ANALYSING`. | No |
+| `RETIRED` | Deliberately superseded or decommissioned by the named owner/governance — a housekeeping exit, not a security action. | Yes |
+
+### State diagram
+
+```mermaid
+stateDiagram-v2
+    [*] --> REQUESTED
+
+    REQUESTED --> REJECTED: Governance denies
+    REQUESTED --> APPROVED_TO_FETCH: Governance approves
+
+    APPROVED_TO_FETCH --> ACQUIRED: Fetch succeeds, hash recorded
+    APPROVED_TO_FETCH --> FETCH_FAILED: Fetch fails
+
+    FETCH_FAILED --> APPROVED_TO_FETCH: Retry, within bound
+    FETCH_FAILED --> REJECTED: Retries exhausted
+
+    ACQUIRED --> ANALYSING: Stage 4/5/6 pipeline begins
+
+    ANALYSING --> ANALYSIS_FAILED: Any control returns FAIL
+    ANALYSING --> INCONCLUSIVE: Any profile returns INCONCLUSIVE or UNAVAILABLE
+    ANALYSING --> COOLING: All controls PASS
+
+    INCONCLUSIVE --> ANALYSING: Remediated, analysis re-run
+    INCONCLUSIVE --> ANALYSIS_FAILED: Disposed as reject
+    INCONCLUSIVE --> COOLING: Disposed as accept, signed compensating-control exception
+
+    COOLING --> TESTING: Delay window elapsed, or signed emergency override
+
+    TESTING --> TEST_FAILED: Test pipeline fails
+    TESTING --> PENDING_PROMOTION: Test pipeline passes, evidence signed
+
+    PENDING_PROMOTION --> APPROVED: Dual sign-off recorded
+    PENDING_PROMOTION --> PROMOTION_REJECTED: Reviewer declines
+
+    APPROVED --> SUSPENDED: Stage 11a/11b flags for investigation
+    APPROVED --> RECALLED: Stage 11b confirmed FAIL-class hit
+    APPROVED --> EXPIRED: Approval expiry date passes
+    APPROVED --> RETIRED: Deliberate retirement or supersession
+
+    SUSPENDED --> APPROVED: Investigation clears the flag
+    SUSPENDED --> RECALLED: Investigation confirms compromise
+
+    EXPIRED --> RENEWAL_REQUESTED: Owner requests renewal
+    RENEWAL_REQUESTED --> APPROVED: Renewal approved, no re-fetch needed
+    RENEWAL_REQUESTED --> EXPIRED: Renewal denied or window lapses again
+
+    REJECTED --> [*]
+    ANALYSIS_FAILED --> [*]
+    TEST_FAILED --> [*]
+    PROMOTION_REJECTED --> [*]
+    RECALLED --> [*]
+    RETIRED --> [*]
+```
+
+### Transitions, actors, and required evidence
+
+| Transition | Triggering actor | Required evidence written to the log |
+|---|---|---|
+| `REQUESTED` → `APPROVED_TO_FETCH` / `REJECTED` | Governance Engine (named human approver, per Stage 1 separation-of-duties rule) | Approver identity, decision, expiry date if approved |
+| `APPROVED_TO_FETCH` → `ACQUIRED` / `FETCH_FAILED` | Restricted proxy (automated) | Resolved source URL, redirect chain, TLS/DNS evidence per Stage 2; canonical hash if acquired |
+| `FETCH_FAILED` → `APPROVED_TO_FETCH` (retry) or `REJECTED` (exhausted) | Pipeline orchestrator (automated, bounded retry count) | Failure reason per attempt; retry count against the bound |
+| `ACQUIRED` → `ANALYSING` | Pipeline orchestrator (automated) | — (state transition only) |
+| `ANALYSING` → `ANALYSIS_FAILED` / `INCONCLUSIVE` / `COOLING` | Stage 4/5/6 controls (automated, per analysis profile outcome) | Every control's verdict (PASS/FAIL/INCONCLUSIVE/UNAVAILABLE per Stage 6) and its report |
+| `INCONCLUSIVE` → any of its three exits | Named security reviewer (human disposition) | Disposition rationale; signed exception record if accepted with compensating control |
+| `COOLING` → `TESTING` | Delay policy gate (automated), or named approver for emergency override | Cooling-off elapsed timestamp, or signed override record (approver, justification, expiry) |
+| `TESTING` → `TEST_FAILED` / `PENDING_PROMOTION` | Test pipeline (automated) | Signed test evidence (Stage 8) |
+| `PENDING_PROMOTION` → `APPROVED` / `PROMOTION_REJECTED` | Security reviewer and named artifact owner (dual sign-off, human) | Both signatures; confirmation the governing approval has not expired |
+| `APPROVED` → `SUSPENDED` | Stage 11a/11b monitoring (automated flag) or human escalation | Triggering signal and its recheck-log/CVE-feed reference |
+| `APPROVED` → `RECALLED` | Stage 11b confirmed-hit automation, or governance following `SUSPENDED` investigation | Confirmed signal (MalwareBazaar match, CAPE/analysis-profile FAIL, key-compromise revocation); push-remediation record |
+| `APPROVED` → `EXPIRED` | Scheduled expiry-check job (automated) | Expiry date reached with no renewal on record |
+| `APPROVED` → `RETIRED` | Named owner or governance (human, voluntary) | Retirement rationale; superseding artifact reference if applicable |
+| `SUSPENDED` → `APPROVED` / `RECALLED` | Named security reviewer (investigation disposition) | Investigation findings and rationale |
+| `EXPIRED` → `RENEWAL_REQUESTED` | Named owner (human) | Renewal justification |
+| `RENEWAL_REQUESTED` → `APPROVED` / `EXPIRED` | Governance Engine (human, per Stage 1's explicit renewal workflow requirement) | Renewal decision; confirmation the underlying artifact evidence (Stage 11b recheck history) is still current |
+
+### Idempotency and retry
+
+- Every transition write carries an **idempotency key** (derived from artifact identity + transition type + a request-scoped nonce). Replaying the same transition event — e.g., a CI job retried after a transient failure — with the same idempotency key is a no-op against an existing log entry, not a duplicate row and not a duplicate side effect (no double notification, no duplicate CMDB entry).
+- `FETCH_FAILED` retries are bounded (a fixed attempt count with backoff) and exhausted retries transition to `REJECTED` with a "fetch exhausted" reason rather than looping indefinitely.
+- A transition is only considered complete once it is durably written to the evidence database's transition log; reflected updates to GitLab/Nexus/CMDB happen after and are retried independently of the canonical write if they fail, since the canonical state must never be blocked on a reflection target being unavailable.
+
+### Cross-system reconciliation
+
+A scheduled reconciliation job compares the evidence database's current-state view against GitLab issue labels, Nexus repository-group membership, and CMDB status fields, and alerts on drift — for example, an evidence-database state of `APPROVED` whose Nexus asset is still sitting in the `intake-quarantine` repository group indicates a broken or incomplete reflection write, not a security event, but it should be caught and fixed rather than silently trusted. This is the concrete mechanism that closes the review's original critique: Nexus repository groups remain a useful, human-legible reflection of state, but are never the thing being trusted for a state decision.
+
+---
+
 ## Backup and recovery for systems of record
 
 Nexus, the CMDB, and the recheck job datastore are systems of record, not caches — losing them loses the evidence base for every approval, advisory, and recheck verdict this architecture depends on, which matters most exactly when an incident is already in progress. Each requires an explicit backup and recovery posture:
@@ -483,7 +603,7 @@ Nexus, the CMDB, and the recheck job datastore are systems of record, not caches
 - **CMDB**: standard database backup for whichever platform is chosen (ServiceNow, PostgreSQL-backed GitLab table, or Ralph); the publisher certificate/key thumbprint register is small but critical — losing it degrades every platform signature recheck to "cannot verify" until restored.
 - **Recheck job datastore**: backed up alongside the CMDB; this table is the primary audit evidence during a post-approval compromise investigation, so its retention window should match or exceed the organisation's incident-investigation lookback requirement.
 
-Specific RPO/RTO targets and backup tooling are an implementation decision for Phase 1 rollout — see "Open issues for internal review" below.
+Specific RPO/RTO targets and backup tooling are an implementation decision for Phase 1 rollout — see [ADR-0011](../adr/0011-backup-rpo-rto-targets.md).
 
 ---
 
@@ -606,7 +726,7 @@ Record and attach sandbox detonation, load-test, or specialised-analysis reports
 - For model artifacts: deployment tracked through CMDB, keyed to the pinned hub revision so a consuming application can be distinguished from one running an unpinned or later revision of the same model.
 - CMDB entries for proprietary artifacts must include: artifact name and version, Nexus reference, intake ticket reference, named owner, approval expiry, expected platform signing identity, vendor bulletin subscription reference, deployment scope, and next review date.
 - CMDB entries for model artifacts must include: model name and pinned hub revision, Nexus reference, intake ticket reference, named owner, approval expiry, license classification, and deployment scope.
-- Recall workflows use the CMDB/WSUS/Intune deployment records (proprietary and model) or actual runtime deployment telemetry — CMDB, EDR, or container/orchestration inventory, not Dependency-Track where-used alone — to identify systems where a recalled artifact is already deployed, and trigger a push remediation task through the available deployment tool rather than relying on notification alone. For open source, Dependency-Track where-used analysis scopes *which project teams* to notify (it reflects BOM/build relationships, not confirmed runtime installation); a separate deployment-inventory source is required to know which systems actually need remediation. Where no push mechanism exists for a given artifact type or environment, that gap is tracked explicitly — see "Open issues for internal review."
+- Recall workflows use the CMDB/WSUS/Intune deployment records (proprietary and model) or actual runtime deployment telemetry — CMDB, EDR, or container/orchestration inventory, not Dependency-Track where-used alone — to identify systems where a recalled artifact is already deployed, and trigger a push remediation task through the available deployment tool rather than relying on notification alone. For open source, Dependency-Track where-used analysis scopes *which project teams* to notify (it reflects BOM/build relationships, not confirmed runtime installation); a separate deployment-inventory source is required to know which systems actually need remediation. Where no push mechanism exists for a given artifact type or environment, that gap is tracked explicitly — see [ADR-0005](../adr/0005-push-remediation-coverage-boundary.md).
 
 ### Stage 11a · Continuous CVE recheck
 
@@ -638,7 +758,7 @@ The recheck job performs the following steps:
 
 **Step 8 — Mutable-source-reference drift recheck.** For Path C artifacts, re-query the source hub for the current commit SHA on the reference the artifact was originally pinned from. If the hub's current SHA no longer matches the pinned SHA recorded at intake, this does not by itself mean the pinned artifact in Nexus has changed — Nexus stores the immutable file, and a pinned commit SHA cannot itself drift — but it is a signal that the mutable branch or tag name has moved, so anything still resolving the model that way outside this pipeline (a developer running `from_pretrained()` directly against the hub, without pinning a revision) would now receive a different, unreviewed file. Flag for human review.
 
-**Rate-limit and coverage budgeting.** External lookup services are rate-limited (VirusTotal's free tier is 500 lookups/day; MalwareBazaar and NSRL have their own practical limits at bulk-query volume). As the approved inventory grows, a nightly full-inventory recheck can exceed these budgets. The recheck job allocates its daily query budget by risk tier — Tier 1 and developer-toolchain artifacts are rechecked every scheduled run; Tier 2 and Tier 3 artifacts are queued and rechecked on a rotating schedule sized to fit the remaining budget — so that coverage degrades predictably (a defined, reported staleness window per tier) rather than silently (some artifacts never getting rechecked without anyone noticing). The coverage rotation schedule and the paid-tier upgrade threshold are implementation decisions — see "Open issues for internal review."
+**Rate-limit and coverage budgeting.** External lookup services are rate-limited (VirusTotal's free tier is 500 lookups/day; MalwareBazaar and NSRL have their own practical limits at bulk-query volume). As the approved inventory grows, a nightly full-inventory recheck can exceed these budgets. The recheck job allocates its daily query budget by risk tier — Tier 1 and developer-toolchain artifacts are rechecked every scheduled run; Tier 2 and Tier 3 artifacts are queued and rechecked on a rotating schedule sized to fit the remaining budget — so that coverage degrades predictably (a defined, reported staleness window per tier) rather than silently (some artifacts never getting rechecked without anyone noticing). The coverage rotation schedule and the paid-tier upgrade threshold are implementation decisions — see [ADR-0004](../adr/0004-virustotal-public-api-usage-and-licensing.md).
 
 **False-positive suppression.** A finding that a human analyst reviews and dispositions as a confirmed false positive is recorded in the recheck job datastore with that disposition. Subsequent recheck runs suppress alerting on that specific hash/signal combination — they still record the check occurred, but do not re-open a GitLab issue — until either the artifact hash changes (a new version) or the matching YARA rule/detection signature itself changes, at which point the suppression no longer applies and the finding re-evaluates fresh.
 
@@ -659,7 +779,7 @@ The recheck job performs the following steps:
 
 All recheck verdicts are written to the recheck job datastore with artifact hash, recheck timestamp, signal type, and disposition. This provides a full audit history of when each artifact was last checked and what the result was.
 
-**Administrative access to the recheck job itself** (scheduling configuration, rate-limit budget allocation, false-positive disposition authority, YARA ruleset promotion from staging) is restricted to a role distinct from artifact approvers, and changes to that configuration go through the same change-control process as a production pipeline change — see "Segregation of duties for pipeline administration" under Stage 1 control objectives and "Open issues for internal review" for enforcement mechanics still to be decided.
+**Administrative access to the recheck job itself** (scheduling configuration, rate-limit budget allocation, false-positive disposition authority, YARA ruleset promotion from staging) is restricted to a role distinct from artifact approvers, and changes to that configuration go through the same change-control process as a production pipeline change — see "Segregation of duties for pipeline administration" under Stage 1 control objectives and [ADR-0006](../adr/0006-segregation-of-duties-enforcement-mechanism.md) for enforcement mechanics still to be decided.
 
 ---
 
@@ -729,65 +849,23 @@ Additional policy guidance per type:
 
 ---
 
-## Open issues for internal review
+## Open decisions
 
-The controls above resolve most of the gaps identified against v1.4, but the following items involve organisational trade-offs — cost, staffing, or risk appetite — that this document should not silently decide on the architecture's behalf. Each is stated as a concrete question with options, for the review meeting to debate and close out with a decision recorded in the next revision.
+Undecided architecture questions are tracked as **Architecture Decision Records** in [`adr/`](../adr/README.md) rather than as inline text in this document — see [ADR-0002](../adr/0002-adopt-architecture-decision-records.md) for why. Each ADR states the context, the considered options with pros/cons, and (once decided) the outcome and consequences; `Proposed` ADRs are still open for review-meeting sign-off.
 
-### 1. Stage 11b coverage at scale — when does the paid VirusTotal tier become mandatory?
-
-VirusTotal's free (Public) API caps at 500 hash lookups/day and its terms restrict use in commercial or automated business workflows — this architecture currently runs it that way anyway for both Stage 6 intake and Stage 11b recheck. This is not a one-time capacity question: Stage 11b rechecks the *entire* approved inventory on a recurring schedule, so every artifact this pipeline ever promotes becomes a permanent, compounding line item against the daily budget. The rate-limit budgeting logic in Stage 11b keeps a fixed inventory from failing silently, but it does not stop the underlying problem — inventory only grows over the life of this program, so the free tier is a shrinking allowance against a growing workload, not a stable one. The ToS restriction is a separate, non-rate-limit reason a commercial licence is likely to become necessary regardless of volume.
-
-- **Option A:** Set a fixed inventory-size threshold (e.g. 2,000 approved artifacts) that triggers automatic budget approval for the VT paid tier, decided now so it isn't a surprise procurement request later.
-- **Option B:** Accept degraded Tier 2/3 recheck frequency indefinitely and rely on MalwareBazaar (no meaningful rate limit) plus YARA re-scan as the primary Stage 11b signal for lower tiers, treating VT as a Tier 1-only control. This does not resolve the ToS question on its own.
-- **Option C:** Replace VT with a commercial threat-intel feed (ReversingLabs TitaniumCloud, Recorded Future, or VirusTotal Premium) sized for bulk queries from the start, avoiding both the free-tier ceiling and the commercial-use restriction at higher fixed cost.
-- **Option D:** Get a legal/procurement read on whether current usage already violates the Public API terms, independent of the rate-limit question — if so, this may need resolving sooner than the rate limit forces it.
-
-### 2. Push remediation — how far does automated recall reach?
-
-Stage 10/11b now call for push remediation to known-deployed systems, not just notification. This is straightforward where WSUS/Intune/SCCM or a configuration management tool already manages the endpoint. It is not solved for environments outside that reach — unmanaged developer workstations, contractor laptops, or air-gapped/isolated network segments.
-
-- **Option A:** Scope automated push remediation to managed fleets only; unmanaged endpoints remain notification-plus-manual-follow-up, with a defined SLA for owner action and an escalation path if the SLA is missed.
-- **Option B:** Require enrollment in a management tool as a precondition for approval to consume from the repository at all, closing the gap by policy rather than tooling.
-- **Option C:** Accept the gap for a defined class of exception (e.g. air-gapped environments) with compensating controls (manual periodic audit) instead of push remediation.
-
-### 3. Segregation of duties for pipeline administrators — enforcement mechanism
-
-The architecture now states that Nexus tag editing, CMDB trust registers, YARA ruleset promotion, and recheck-job configuration require a role distinct from artifact approval. It does not yet specify how that separation is technically enforced (as opposed to just documented as policy).
-
-- **Option A:** RBAC roles enforced natively in each tool (Nexus roles, GitLab CODEOWNERS on the recheck-job repo, CMDB access groups), audited quarterly.
-- **Option B:** All pipeline-admin changes (ruleset promotion, trust register edits, recheck config) routed through a GitLab merge request requiring a second approver, giving a uniform audit trail across tools regardless of each tool's native RBAC granularity.
-- **Option C:** Defer full enforcement to Phase 6 hardening and accept policy-only separation (documented, not technically enforced) for the initial rollout, with a stated date to revisit.
-
-### 4. Model registry tooling — dedicated platform or Nexus tags plus CMDB?
-
-Path C's data mapping currently piggybacks model card and lineage metadata on Nexus tags and the CMDB, matching the existing Path B pattern. A dedicated model registry (MLflow, or a model-specific module in an existing MLOps platform) would give richer lineage graphs and native integration with training/fine-tuning pipelines, at the cost of a new system of record to secure and back up.
-
-- **Option A:** Start with Nexus tags plus CMDB (no new system) and revisit if model volume or lineage complexity outgrows it.
-- **Option B:** Stand up a dedicated model registry from the start if the organisation already does meaningful in-house fine-tuning, since lineage tracking is core to that workflow rather than an add-on.
-
-### 5. Export control and legal review for cryptographic and firmware artifacts
-
-Neither this document nor the tooling guide currently routes firmware, cryptographic libraries, or certain commercial software through an export-control (ITAR/EAR) or legal review gate. This may already be handled by an existing legal process outside this architecture's scope, or it may be a genuine gap.
-
-- **Option A:** Confirm an existing legal/export-control process already covers artifacts entering through this pipeline, and add a pointer/webhook from Stage 1 intake into that process rather than duplicating it.
-- **Option B:** If no such process exists, add an explicit export-control classification field at Stage 1 intake and a legal-review gate before Stage 9 promotion for artifact categories that require it.
-
-### 6. Alert-tuning ownership and cadence
-
-Phase 6 of the tooling guide calls for tuning YARA rules and Grype thresholds "to reduce noise," but doesn't assign ownership or a review cadence, which is how alert fatigue quietly erodes a control's effectiveness over time.
-
-- **Option A:** Assign alert-tuning as a standing responsibility of a named role (e.g. the security architecture team lead) with a monthly review of Stage 11b false-positive rates.
-- **Option B:** Track false-positive suppression counts (now recorded per the recheck datastore disposition field) as a formal metric with a target ceiling, reviewed at the same cadence as the CMDB quarterly review.
-
-### 7. Structural documentation improvements — deferred, not scheduled
-
-The independent review of this architecture (see `architecture-tooling-review.md`) recommended three structural changes that are each a legitimate improvement in isolation, but represent a meaningfully larger investment than a documentation correction — each is a design/process decision on its own, not a fix to fold in silently. They are logged here as tracked future work rather than actioned in this revision, so the decision to invest in them (or not) is made deliberately rather than by default.
-
-**7a. Normative control catalogue and traceability matrix.** Introduce stable control IDs (`INTAKE-*`, `FETCH-*`, `AUTH-*`, `ANALYSIS-*`, `PROMOTE-*`, `CONSUME-*`, `MONITOR-*`, `RECALL-*`, `PLATFORM-*`) and RFC-style requirement language (MUST/SHOULD/MAY), with each control mapped to threat, owner, implementation, evidence, failure mode, metric, and test. This would make the architecture audit-ready in a way prose control descriptions are not, at the cost of authoring and maintaining a much larger, more rigid document. Decide whether this repository's purpose (internal reference architecture vs. a document that must pass external audit or compliance review) justifies that cost before starting it — it is a poor fit to retrofit incrementally.
-
-**7b. Formal artifact lifecycle state machine.** Define explicit states (`REQUESTED → APPROVED_TO_FETCH → ACQUIRED → ANALYSING → INCONCLUSIVE/REJECTED/COOLING → TESTED → APPROVED → SUSPENDED/RECALLED → EXPIRED`), who can perform each transition, required evidence per transition, idempotency and retry behaviour, and how state reconciles across the portal, evidence database, repository, and CMDB — rather than treating Nexus repository groups as a de facto state machine, which they were never designed to fully represent. This is worth doing once the evidence database (see "Repository Firewall vs. the enterprise intake evidence store," Stage 3) is actually being implemented, since the state machine and the evidence schema are naturally designed together.
-
-**7c. Architecture Decision Records (ADRs) in place of inline "open issues."** This section itself — free-text options embedded in the architecture document — is a reasonable starting point but doesn't scale well: it conflates the currently-open questions with the document's normative content, and doesn't leave a clean audit trail of *which* option was chosen and why once a decision is made. Moving to a standard ADR format (one file per decision, status/context/decision/consequences) would separate "what we decided" from "what the architecture currently says," and is a natural companion to control catalogue work (7a) if that is pursued. Until adopted, this "Open issues for internal review" section remains the mechanism for tracking undecided questions — decisions made against it should be recorded back into this section (or migrated to an ADR) rather than left implicit in a future document edit.
+| ADR | Question | Status |
+|---|---|---|
+| [0001](../adr/0001-two-document-split.md) | Keep this document and the tooling guide separate, or merge them? | Accepted — kept separate |
+| [0002](../adr/0002-adopt-architecture-decision-records.md) | Adopt ADRs in place of this section's previous inline format | Accepted |
+| [0003](../adr/0003-adopt-artifact-lifecycle-state-machine.md) | Adopt the formal lifecycle state machine (see above) | Accepted |
+| [0004](../adr/0004-virustotal-public-api-usage-and-licensing.md) | When does the paid VirusTotal tier become mandatory? | Proposed |
+| [0005](../adr/0005-push-remediation-coverage-boundary.md) | How far does automated push remediation reach? | Proposed |
+| [0006](../adr/0006-segregation-of-duties-enforcement-mechanism.md) | How is pipeline-admin segregation of duties technically enforced? | Proposed |
+| [0007](../adr/0007-model-registry-tooling-choice.md) | Dedicated model registry, or Nexus tags plus CMDB? | Proposed |
+| [0008](../adr/0008-export-control-and-legal-review-routing.md) | Export control / legal review routing | Proposed |
+| [0009](../adr/0009-alert-tuning-ownership-and-cadence.md) | Alert-tuning ownership and cadence | Proposed |
+| [0010](../adr/0010-control-id-taxonomy-and-traceability-matrix.md) | Adopt a normative control-ID taxonomy and traceability matrix? | Proposed — explicitly deferred |
+| [0011](../adr/0011-backup-rpo-rto-targets.md) | Backup RPO/RTO targets and tooling for systems of record | Proposed |
 
 ---
 
@@ -844,11 +922,18 @@ Requirements:
   and non-human-identity rows.
 - Artifact-type table with a binary recheck column describing which Stage 11b controls apply per
   artifact type, including AI/ML model rows.
-- An "Open issues for internal review" section stating unresolved organisational trade-offs as
-  numbered questions with 2-3 labeled options each, for a review meeting to debate and decide —
-  covering at minimum: recheck coverage economics at scale, how far automated push remediation
-  reaches, how segregation of duties is technically enforced, model registry tooling choice, export
-  control/legal review routing, and alert-tuning ownership.
+- A formal artifact lifecycle state machine section: an explicit state table (state, meaning,
+  terminal or not), a Mermaid `stateDiagram-v2`, a transitions/actors/required-evidence table, and
+  idempotency/retry/cross-system-reconciliation rules, with the evidence database as the canonical
+  state store and GitLab/Nexus/CMDB as reconciled reflections of it.
+- An "Open decisions" section that does not itself contain the trade-off options inline, but points
+  to an `adr/` directory of Architecture Decision Records (MADR-style: status, context, considered
+  options with pros/cons, decision outcome, consequences) — one ADR per undecided organisational
+  trade-off, covering at minimum: recheck coverage economics at scale, how far automated push
+  remediation reaches, how segregation of duties is technically enforced, model registry tooling
+  choice, export control/legal review routing, alert-tuning ownership, whether to adopt a normative
+  control-ID taxonomy, plus ADRs recording the decisions to keep the two documents separate, to
+  adopt ADRs at all, and to adopt the lifecycle state machine.
 - Write for an enterprise security and architecture audience.
 - Use Markdown, tables, code blocks, and Mermaid only; no HTML.
 ```

@@ -14,8 +14,9 @@ The architecture enforces a single controlled intake path for all artifact types
 
 | Document | Purpose |
 |---|---|
-| [`package-intake-architecture.md`](package-intake-architecture.md) | The control-focused architecture: stages, control objectives, data flows, and the open decisions still requiring sign-off. Product-neutral where possible. |
-| [`solution-architecture-tooling.md`](solution-architecture-tooling.md) | The implementation guide: specific tools, licensing/edition trade-offs, deployment commands, phased rollout plan, and tooling-level open decisions. |
-| [`architecture-tooling-review.md`](architecture-tooling-review.md) | An independent review of the two documents above, identifying factual, licensing, and implementability corrections. Track which findings have been addressed in the current revision of each document via their revision-history tables. |
+| [`package-intake-architecture.md`](package-intake-architecture.md) | The control-focused architecture: stages, control objectives, data flows, and the artifact lifecycle state machine. Product-neutral where possible. |
+| [`solution-architecture-tooling.md`](solution-architecture-tooling.md) | The implementation guide: specific tools, licensing/edition trade-offs, deployment commands, and phased rollout plan. |
+| [`architecture-tooling-review.md`](architecture-tooling-review.md) | An independent review of the two documents above, identifying factual, licensing, and implementability corrections. Track which findings have been addressed via each document's revision-history table. |
+| [`adr/`](adr/README.md) | Architecture Decision Records — one file per undecided or settled cross-cutting decision (status, context, considered options with pros/cons, outcome, consequences). This is where open questions live now; neither main document carries an inline "open issues" section anymore. |
 
-Read the architecture document first for the control model, then the tooling guide for how to actually build it. The review document is worth reading alongside both — several of its findings are still open decisions rather than settled corrections, and are called out as such in each document's "Open issues for internal review" section.
+Read the architecture document first for the control model, then the tooling guide for how to actually build it. The review document is worth reading alongside both — several of its findings are still open decisions rather than settled corrections, and are now tracked as ADRs rather than inline text in either document.
