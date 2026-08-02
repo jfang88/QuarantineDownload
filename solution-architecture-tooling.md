@@ -6,7 +6,7 @@
 | Field | Value |
 |---|---|
 | Document title | Solution Architecture: Tooling and Implementation Guide |
-| Version | 1.8 |
+| Version | 1.9 |
 | Status | Draft for review |
 | Owner | Security Architecture |
 | Last updated | 2026-08-02 |
@@ -24,6 +24,7 @@
 | 1.6 | 2026-08-02 | Security Architecture | Addressed `architecture-tooling-review.md` findings: added licensing/edition decision matrix; corrected NSRL, VirusTotal, Repository Firewall/evidence-database, WSUS/Update Catalog, and Dependency-Track claims; replaced blanket CAPE mandate with per-platform analysis profiles; fixed the trust-root section's own `curl \| sh` install pattern; added ML-BOM tooling for models; added model-sandbox resource limits and Stage 2 SSRF hardening; added signature-verification nuance |
 | 1.7 | 2026-08-02 | Security Architecture | Replaced the inline "Open issues for internal review" section with a pointer to the new `adr/` directory per ADR-0002 |
 | 1.8 | 2026-08-02 | Security Architecture | Added a References section distinguishing claims independently verified against a live source this session (Dependency-Track 5.x requirements, WSUS/Update Catalog workflow, GitLab CE approvals, VirusTotal ToS, Syft/Grype, Sigstore/cosign, Trivy compromise, CycloneDX ML-BOM, safetensors) from carried and unverified claims (CAPE, Apple codesign, osslsigncode, fickling/picklescan, binwalk/FirmAE, Keycloak specifics, MSRC CVRF/CSAF, GGUF, Docker Desktop/WSL2) |
+| 1.9 | 2026-08-02 | Security Architecture | Replaced Stage 11b's flat nightly/weekly recheck schedule with the age-based tapering cadence from `package-intake-architecture.md` v1.10 (daily 0–30 days, weekly through 180 days, monthly after); added a `recheck_tier()` example and updated Phase 5 rollout item 26 to match |
 
 > **9 architecture decisions are still open** and are not yet reflected as final in this document, including whether the tool choices below should be built as described, bought from commercial vendors, or partially replaced under a hybrid sourcing strategy — see [ADR-0012](adr/0012-build-vs-buy-vs-hybrid-sourcing-strategy.md) and [`enterprise-build-vs-buy-evaluation.md`](enterprise-build-vs-buy-evaluation.md). See [`adr/README.md`](adr/README.md) for the full register, or jump to [Open decisions](#open-decisions) at the bottom of this document.
 >
@@ -801,7 +802,24 @@ There is no CVE-equivalent feed for model weights. Monitoring relies on the Stag
 
 This stage is new as of v1.3 of this document. It addresses supply chain attacks where a binary approved months ago is later identified as malicious — a class of threat that Dependency-Track and SBOM-based tools cannot detect because they rely on CVE matching against component version strings.
 
-The recheck job is a scheduled Python or Bash script deployed alongside the pipeline infrastructure. It runs nightly for Tier 1 artifacts (developer toolchain, privileged binaries) and weekly for all others.
+The recheck job is a scheduled Python or Bash script deployed alongside the pipeline infrastructure. Recheck frequency is age-based rather than a flat nightly/weekly split — see `package-intake-architecture.md`'s Stage 11b section for the full rationale (the tapering schedule tracks how quickly AV-engine and threat-intel coverage for a compromised hash typically appears after a supply-chain compromise becomes known, based on the Notepad++/Chrysalis, XZ Utils, SolarWinds, and CCleaner precedent cited there):
+
+| Artifact age since promotion (or since last cadence reset) | Frequency | Example cron schedule |
+|---|---|---|
+| 0–30 days | Daily | `0 2 * * *` |
+| 31–180 days | Weekly | `0 3 * * 1` |
+| 180+ days | Monthly | `0 4 1 * *` |
+
+Tier 1 artifacts (developer toolchain, privileged binaries) stay on the daily schedule regardless of age. The job determines which tier an artifact currently falls in by reading `last_promoted_at` (or the timestamp of its last cadence reset) from the recheck job datastore, rather than running one undifferentiated job against the whole inventory on a single schedule:
+
+```python
+def recheck_tier(days_since_promotion: int, is_tier1: bool) -> str:
+    if is_tier1 or days_since_promotion <= 30:
+        return "daily"
+    if days_since_promotion <= 180:
+        return "weekly"
+    return "monthly"
+```
 
 ### Required tooling
 
@@ -1296,7 +1314,7 @@ flowchart TB
 23. Implement Authenticode OCSP recheck using osslsigncode and OpenSSL.
 24. Create the `artifact_recheck_log` PostgreSQL table. Wire verdict writes and Nexus tag updates.
 25. Configure Alertmanager rules for MalwareBazaar hits and OCSP revocation events (immediate auto-block) and VT/YARA hits (flagged for human review).
-26. Set recheck schedules: nightly for Tier 1 and developer toolchain artifacts; weekly for all others.
+26. Set recheck schedules: age-based tapering cadence (daily for 0–30 days since promotion, weekly through 180 days, monthly after; Tier 1 and developer toolchain artifacts always daily) per `package-intake-architecture.md` Stage 11b.
 
 **Phase 6 — AI/ML model artifact pipeline (weeks 23–26)**
 27. Deploy `huggingface_hub` (or equivalent hub client) integration for revision resolution and pinning at Stage 4c.

@@ -14,6 +14,8 @@ The architecture uses VirusTotal's Public API (free, 500 lookups/day) as the def
 1. **Growth, not just a fixed ceiling.** Stage 11b rechecks the *entire* approved inventory on a recurring schedule. Every artifact this pipeline ever promotes becomes a permanent, compounding line item against the daily budget — there is no steady state where "the free tier is enough," only a longer or shorter runway before Tier 2/3 recheck staleness becomes unacceptable.
 2. **Terms of service.** VirusTotal's Public API terms restrict use in commercial products, services, or automated business workflows. An unattended, nightly, production-integrated enterprise recheck job is plausibly exactly that, independent of whether the 500/day rate limit is ever actually exceeded.
 
+As of `package-intake-architecture.md` v1.10, Stage 11b applies an age-based tapering recheck cadence (daily for the first 30 days after promotion, weekly through 180 days, monthly after) as a partial mitigation. This caps the steady-state size of the "always daily" cohort rather than letting it track total inventory size, so it slows the rate-limit pressure described above — but it does not resolve either pressure on its own: the 31+ day cohorts still grow with inventory, and cadence has no bearing on the ToS question. Treat the tapering design as a mitigation that changes the timeline of the options below, not as an answer to this ADR.
+
 ## Decision drivers
 
 - Avoid discovering the rate-limit ceiling in production as an outage rather than a planned procurement event.
