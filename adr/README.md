@@ -16,7 +16,7 @@ Each ADR follows a lightweight MADR-style template: Status, Context, Decision Dr
 
 ## Index
 
-**Status at a glance: 8 open (need a decision) · 3 accepted · 0 superseded.** Open items are listed first so they don't get lost among settled ones — this table is the answer to "what's still undecided" without having to open every file. It is the single register for both `package-intake-architecture.md` and `solution-architecture-tooling.md`; neither document repeats this table, they only link to it (see "Open decisions" in each).
+**Status at a glance: 9 open (need a decision) · 3 accepted · 0 superseded.** Open items are listed first so they don't get lost among settled ones — this table is the answer to "what's still undecided" without having to open every file. It is the single register for both `package-intake-architecture.md` and `solution-architecture-tooling.md`; neither document repeats this table, they only link to it (see "Open decisions" in each).
 
 ### 🟡 Open — needs a review-meeting decision
 
@@ -30,6 +30,7 @@ Each ADR follows a lightweight MADR-style template: Status, Context, Decision Dr
 | [0009](0009-alert-tuning-ownership-and-cadence.md) | Alert-tuning ownership and cadence | Stage 11b false-positive management |
 | [0010](0010-control-id-taxonomy-and-traceability-matrix.md) | Normative control-ID taxonomy and traceability matrix | Whole architecture document — explicitly deferred, not just unprioritized |
 | [0011](0011-backup-rpo-rto-targets.md) | Backup RPO/RTO targets and tooling for systems of record | Nexus, CMDB, recheck datastore |
+| [0012](0012-build-vs-buy-vs-hybrid-sourcing-strategy.md) | Build-versus-buy-versus-hybrid sourcing strategy | **The whole repository** — determines whether `solution-architecture-tooling.md`'s free-first tool list is the implementation plan or gets substantially replaced by commercial procurement |
 
 ### 🟢 Decided
 
