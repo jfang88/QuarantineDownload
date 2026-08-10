@@ -1,12 +1,14 @@
 # Architecture Decision Records
 
-This directory tracks the decisions behind the package intake architecture — both settled ones and ones still open for debate. It replaces the inline "Open issues for internal review" sections that previously lived at the bottom of [`package-intake-architecture.md`](../package-intake-architecture.md) and [`solution-architecture-tooling.md`](../solution-architecture-tooling.md): those sections conflated undecided questions with normative document content, and once a decision was made there was no clean record of *which* option was chosen and why. An ADR is a single, dated, append-only record per decision — when a decision changes, a new ADR supersedes the old one rather than editing history in place.
+This directory tracks the decisions behind the repository's controlled file-movement architectures — both settled ones and ones still open for debate. It began with the package-intake architecture and now also covers the proposed controlled operational-data release / cross-domain transfer control plane.
+
+The ADR register replaces inline "Open issues for internal review" sections as the canonical place for cross-cutting decisions. An ADR is a single, dated, append-only record per decision — when a decision changes, a new ADR supersedes the old one rather than editing history in place.
 
 ## Format
 
 Each ADR follows a lightweight MADR-style template: Status, Context, Decision Drivers, Considered Options (with pros/cons for each), Decision Outcome, and Consequences. See any file below for the pattern.
 
-Most ADRs here are organizational/process judgment calls (which enforcement mechanism, which cadence, which registry) rather than external factual claims, so they don't carry their own References section. Where an ADR does rely on a specific external fact — for example, ADR-0004's VirusTotal Public API terms — that fact is verified in the citing main document's own **References** section (`package-intake-architecture.md` or `solution-architecture-tooling.md`), not duplicated here. ADR-0012 is the exception: it summarizes `enterprise-build-vs-buy-evaluation.md`, which carries its own extensive references.
+Most ADRs here are organizational/process judgment calls (which enforcement mechanism, which cadence, which registry) rather than external factual claims, so they don't carry their own References section. Where an ADR does rely on a specific external fact — for example, ADR-0004's VirusTotal Public API terms — that fact is verified in the citing main document's own **References** section rather than duplicated here. ADR-0012 is the exception: it summarizes `enterprise-build-vs-buy-evaluation.md`, which carries its own extensive references.
 
 **Status values used in this directory:**
 
@@ -18,7 +20,9 @@ Most ADRs here are organizational/process judgment calls (which enforcement mech
 
 ## Index
 
-**Status at a glance: 9 open (need a decision) · 3 accepted · 0 superseded.** Open items are listed first so they don't get lost among settled ones — this table is the answer to "what's still undecided" without having to open every file. It is the single register for both `package-intake-architecture.md` and `solution-architecture-tooling.md`; neither document repeats this table, they only link to it (see "Open decisions" in each).
+**Status at a glance: 10 open (need a decision) · 3 accepted · 0 superseded.** Open items are listed first so they don't get lost among settled ones — this table is the answer to "what's still undecided" without having to open every file.
+
+The original nine open decisions remain primarily scoped to `package-intake-architecture.md` and `solution-architecture-tooling.md`. ADR-0013 is repository-level and introduces the proposed relationship between package/software ingress and controlled operational-data release.
 
 ### 🟡 Open — needs a review-meeting decision
 
@@ -30,9 +34,10 @@ Most ADRs here are organizational/process judgment calls (which enforcement mech
 | [0007](0007-model-registry-tooling-choice.md) | Model registry tooling: Nexus tags + CMDB vs. a dedicated platform | Path C / Stage 5c |
 | [0008](0008-export-control-and-legal-review-routing.md) | Export control and legal review routing | Stage 1 intake |
 | [0009](0009-alert-tuning-ownership-and-cadence.md) | Alert-tuning ownership and cadence | Stage 11b false-positive management |
-| [0010](0010-control-id-taxonomy-and-traceability-matrix.md) | Normative control-ID taxonomy and traceability matrix | Whole architecture document — explicitly deferred, not just unprioritized |
+| [0010](0010-control-id-taxonomy-and-traceability-matrix.md) | Normative control-ID taxonomy and traceability matrix | Whole package-intake architecture document — explicitly deferred, not just unprioritized |
 | [0011](0011-backup-rpo-rto-targets.md) | Backup RPO/RTO targets and tooling for systems of record | Nexus, CMDB, recheck datastore |
-| [0012](0012-build-vs-buy-vs-hybrid-sourcing-strategy.md) | Build-versus-buy-versus-hybrid sourcing strategy | **The whole repository** — determines whether `solution-architecture-tooling.md`'s free-first tool list is the implementation plan or gets substantially replaced by commercial procurement |
+| [0012](0012-build-vs-buy-vs-hybrid-sourcing-strategy.md) | Build-versus-buy-versus-hybrid sourcing strategy | Package/file ingress sourcing direction and wider repository procurement approach |
+| [0013](0013-separate-ingress-and-data-release-control-planes.md) | Separate ingress and operational-data release control planes | **Repository structure and new data-release architecture** — whether package/software ingress and operational-data egress/cross-domain release remain separate sibling lifecycles sharing platform primitives |
 
 ### 🟢 Decided
 
@@ -41,6 +46,20 @@ Most ADRs here are organizational/process judgment calls (which enforcement mech
 | [0001](0001-two-document-split.md) | Keep the architecture and tooling guide as two separate documents | Accepted |
 | [0002](0002-adopt-architecture-decision-records.md) | Adopt Architecture Decision Records in place of inline open issues | Accepted |
 | [0003](0003-adopt-artifact-lifecycle-state-machine.md) | Adopt a formal artifact lifecycle state machine | Accepted |
+
+## Architecture documents covered by this register
+
+### Package/software ingress
+
+- [`../package-intake-architecture.md`](../package-intake-architecture.md)
+- [`../solution-architecture-tooling.md`](../solution-architecture-tooling.md)
+- [`../enterprise-build-vs-buy-evaluation.md`](../enterprise-build-vs-buy-evaluation.md)
+
+### Controlled operational-data release
+
+- [`../controlled-data-release-architecture.md`](../controlled-data-release-architecture.md)
+- [`../controlled-data-release-tooling.md`](../controlled-data-release-tooling.md)
+- [`../controlled-data-release-poc.md`](../controlled-data-release-poc.md)
 
 ## Adding a new ADR
 
