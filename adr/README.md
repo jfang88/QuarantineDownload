@@ -2,7 +2,7 @@
 
 This directory tracks the decisions behind the repository's controlled file-movement architectures — both settled ones and ones still open for debate. It began with the package-intake architecture and now also covers the proposed controlled operational-data release / cross-domain transfer control plane.
 
-The ADR register replaces inline "Open issues for internal review" sections as the canonical place for cross-cutting decisions. An ADR is a single, dated, append-only record per decision — when a decision changes, a new ADR supersedes the old one rather than editing history in place.
+The ADR register replaces inline "Open issues for internal review" sections as the canonical place for **architecture and sourcing decisions**. Not every policy parameter needs its own ADR: retention periods, data-classification rules, redaction standards, and similar organization-specific policy inputs may be governed in policy/standards documents instead. An ADR is a single, dated, append-only record per architectural decision — when a decision changes, a new ADR supersedes the old one rather than editing history in place.
 
 ## Format
 
@@ -20,9 +20,9 @@ Most ADRs here are organizational/process judgment calls (which enforcement mech
 
 ## Index
 
-**Status at a glance: 10 open (need a decision) · 3 accepted · 0 superseded.** Open items are listed first so they don't get lost among settled ones — this table is the answer to "what's still undecided" without having to open every file.
+**Status at a glance: 12 open (need a decision) · 3 accepted · 0 superseded.** Open items are listed first so they don't get lost among settled ones — this table is the answer to "what's still undecided" at the architecture/sourcing level without having to open every file.
 
-The original nine open decisions remain primarily scoped to `package-intake-architecture.md` and `solution-architecture-tooling.md`. ADR-0013 is repository-level and introduces the proposed relationship between package/software ingress and controlled operational-data release.
+The original nine open decisions remain primarily scoped to `package-intake-architecture.md` and `solution-architecture-tooling.md`. ADR-0013, ADR-0014, and ADR-0015 cover the repository-level/data-release additions: the relationship between the control planes, the data-release sourcing strategy, and the data-release evidence-store boundary.
 
 ### 🟡 Open — needs a review-meeting decision
 
@@ -36,8 +36,10 @@ The original nine open decisions remain primarily scoped to `package-intake-arch
 | [0009](0009-alert-tuning-ownership-and-cadence.md) | Alert-tuning ownership and cadence | Stage 11b false-positive management |
 | [0010](0010-control-id-taxonomy-and-traceability-matrix.md) | Normative control-ID taxonomy and traceability matrix | Whole package-intake architecture document — explicitly deferred, not just unprioritized |
 | [0011](0011-backup-rpo-rto-targets.md) | Backup RPO/RTO targets and tooling for systems of record | Nexus, CMDB, recheck datastore |
-| [0012](0012-build-vs-buy-vs-hybrid-sourcing-strategy.md) | Build-versus-buy-versus-hybrid sourcing strategy | Package/file ingress sourcing direction and wider repository procurement approach |
-| [0013](0013-separate-ingress-and-data-release-control-planes.md) | Separate ingress and operational-data release control planes | **Repository structure and new data-release architecture** — whether package/software ingress and operational-data egress/cross-domain release remain separate sibling lifecycles sharing platform primitives |
+| [0012](0012-build-vs-buy-vs-hybrid-sourcing-strategy.md) | Build-versus-buy-versus-hybrid sourcing strategy for enterprise artifact ingress | **Ingress domain only** — package/file ingress sourcing direction; does not decide controlled-data-release sourcing |
+| [0013](0013-separate-ingress-and-data-release-control-planes.md) | Separate ingress and operational-data release control planes | **Repository structure** — whether package/software ingress and operational-data egress/cross-domain release remain separate sibling lifecycles sharing platform primitives |
+| [0014](0014-controlled-data-release-sourcing-strategy.md) | Controlled-data-release sourcing strategy | Build/buy/hybrid direction for controlled collection, DLP/content inspection, redaction, MFT/transfer brokering, and release operations |
+| [0015](0015-data-release-evidence-store-boundary.md) | Controlled-data-release evidence-store boundary | Whether data release shares package tables, uses bounded sibling schemas on a shared DB platform, or uses a separate evidence database |
 
 ### 🟢 Decided
 

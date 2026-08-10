@@ -5,13 +5,22 @@
 | Field | Value |
 |---|---|
 | Document title | Controlled Data Release — Tooling and Implementation Guide |
-| Version | 0.1 |
+| Version | 0.2 |
 | Status | Draft for architecture and procurement review |
 | Owner | Security Architecture |
 | Last updated | 2026-08-10 |
-| Related documents | [`controlled-data-release-architecture.md`](controlled-data-release-architecture.md), [`solution-architecture-tooling.md`](solution-architecture-tooling.md), [`enterprise-build-vs-buy-evaluation.md`](enterprise-build-vs-buy-evaluation.md) |
+| Related documents | [`controlled-data-release-architecture.md`](controlled-data-release-architecture.md), [`solution-architecture-tooling.md`](solution-architecture-tooling.md), [`enterprise-build-vs-buy-evaluation.md`](enterprise-build-vs-buy-evaluation.md), [ADR-0013](adr/0013-separate-ingress-and-data-release-control-planes.md), [ADR-0014](adr/0014-controlled-data-release-sourcing-strategy.md), [ADR-0015](adr/0015-data-release-evidence-store-boundary.md) |
+
+### Revision history
+
+| Version | Date | Author | Summary of changes |
+|---|---|---|---|
+| 0.1 | 2026-08-10 | Security Architecture | Initial controlled-data-release capability and implementation guide |
+| 0.2 | 2026-08-10 | Security Architecture | Reconciled sourcing/evidence decisions with ADRs; strengthened private inspection, human-assisted vendor uploads, disconnected transfer, destination protections, and vendor-return handling |
 
 > This is a companion to the existing package-intake tooling and build-versus-buy documents. It introduces the additional capability domain required for controlled operational-data release, cross-domain transfer, and vendor-support upload. It does not select a production product.
+>
+> **Decision boundary:** the hybrid pattern described below is a working recommendation, not a ratified sourcing decision. See [ADR-0014](adr/0014-controlled-data-release-sourcing-strategy.md). The evidence-store integration pattern is separately tracked in [ADR-0015](adr/0015-data-release-evidence-store-boundary.md).
 
 ---
 
@@ -30,18 +39,20 @@ A production controlled-data-release solution normally spans several product or 
 | DLP / classification | PII, customer data, regulated data, confidential data, security-sensitive information |
 | Redaction / sanitisation | Mask/remove sensitive content, drop files, minimise structured data, preserve lineage |
 | Managed File Transfer / transfer broker | Destination profiles, protocol mediation, audit, receipts, no general routing |
+| Secure browser / controlled upload | Restricted human-assisted upload to approved vendor portals when automation is unavailable |
 | Policy engine | Risk-based fail-closed decisions, exception handling, destination/classification policy |
 | Evidence and lifecycle store | Canonical state, immutable hashes, findings, approvals, transformation lineage, receipts |
 | Monitoring / SIEM | Operational health, abuse detection, policy bypass alerts, investigations |
 | Encryption / key management | At-rest, in-transit, optional file-level encryption and controlled key exchange |
+| Retention / legal hold | Purge, preservation hold, evidence retention, case closure and deletion workflow |
 
 ---
 
-## 2. Fourth enterprise capability domain
+## 2. Additional enterprise capability domain
 
-The existing build-versus-buy evaluation distinguishes package-manager ingress, general file/software ingress, and business software onboarding. Controlled operational-data release should be treated as a **fourth capability domain**:
+The existing `enterprise-build-vs-buy-evaluation.md` is intentionally scoped to three **ingress** domains: package-manager ingress, general file/software ingress, and business software onboarding. Controlled operational-data release is a separate repository-level capability domain rather than a fourth type of ingress.
 
-### 2.4 Secure operational-data release and cross-domain transfer
+### Secure operational-data release and cross-domain transfer
 
 This covers data moving from protected enterprise systems to another internal trust zone or external support party.
 
@@ -52,15 +63,18 @@ Examples:
 - packet captures or crash dumps supplied to specialist support teams;
 - redacted database extracts used to reproduce a fault;
 - support bundles uploaded to an external vendor portal;
-- partner/vendor exchanges where the outbound data must be inspected and destination-bound.
+- partner/vendor exchanges where the outbound data must be inspected and destination-bound;
+- transfers to disconnected or highly segmented environments through an approved cross-domain or removable-media process.
 
-**Key requirement:** the organisation must control collection, inspect and minimise the data, bind release approval to exact bytes and an approved destination, transfer through a non-routable audited broker, and prevent transfer from becoming an administrative change channel.
+**Key requirement:** the organisation must control collection, inspect and minimise the data, bind release approval to exact bytes and an approved destination, transfer through a non-routable audited mechanism, and prevent transfer from becoming an administrative change channel.
 
-This domain is not satisfied by a package repository, antivirus scanner, ordinary file share, or ITSM approval workflow alone.
+This domain is not satisfied by a package repository, antivirus scanner, ordinary file share, generic browser upload, or ITSM approval workflow alone.
 
 ---
 
 ## 3. Build, buy, and hybrid patterns
+
+The choice between the patterns below is tracked in [ADR-0014](adr/0014-controlled-data-release-sourcing-strategy.md).
 
 ### Pattern A — Build a thin release workflow using existing enterprise platforms
 
@@ -74,31 +88,33 @@ Typical composition:
 - secrets detection and DLP APIs/engines;
 - custom policy/orchestration service;
 - managed SFTP/HTTPS connectors;
+- controlled browser-upload path for unsupported vendor portals;
 - evidence database;
 - SIEM integration.
 
 **Strengths:** aligns closely to enterprise policy and existing infrastructure; avoids creating another user-facing platform.
 
-**Weaknesses:** integration, evidence correlation, transformation lineage, destination binding, and lifecycle correctness become custom engineering responsibilities.
+**Weaknesses:** integration, evidence correlation, transformation lineage, destination binding, lifecycle correctness, secure human-upload handling, and transfer operations become custom engineering responsibilities.
 
 ### Pattern B — Buy Managed File Transfer / secure file exchange and integrate governance
 
-Use a mature MFT/secure exchange platform for transfer, partner profiles, protocol handling, receipts, encryption, and operations; integrate it with enterprise workflow, DLP, secrets inspection, and evidence storage.
+Use a mature MFT/secure exchange platform for transfer, partner profiles, protocol handling, receipts, encryption, and operations; integrate it with enterprise workflow, DLP, secrets inspection, redaction, and evidence storage.
 
 **Strengths:** mature protocol/security operations; strong partner/destination administration; supported transfer features.
 
-**Weaknesses:** MFT alone may not provide source-data minimisation, deep DLP/secrets inspection, redaction workflow, or a canonical release lifecycle.
+**Weaknesses:** MFT alone may not provide source-data minimisation, deep DLP/secrets inspection, redaction workflow, a canonical release lifecycle, or safe collection from protected source systems.
 
-### Pattern C — Buy secure content inspection/DLP plus MFT, retain a thin control plane
+### Pattern C — Buy/reuse secure content inspection/DLP plus MFT, retain a thin control plane
 
-This is the likely enterprise hybrid pattern:
+This is the **working recommendation pending ADR-0014**:
 
 - ITSM/identity remain enterprise standards;
-- content/DLP/security scanning comes from mature security platforms;
+- content/DLP/security scanning comes from mature private-processing security platforms where available;
 - MFT/cross-domain transfer comes from a supported transfer platform;
-- the enterprise owns only the policy bindings, canonical release state, evidence correlation, exception model, and source/destination integrations.
+- secure-browser or managed-upload controls handle vendor portals that cannot be integrated directly;
+- the enterprise owns the policy bindings, canonical release state, evidence correlation, exception model, transformation lineage, and source/destination integrations.
 
-This mirrors the existing repository's broader hybrid direction: buy mature specialist capabilities and avoid rebuilding malware intelligence, file-transfer engines, DLP classification, or repository functions without a strong reason.
+This mirrors the existing repository's ingress analysis without assuming the two domains must choose identical products: buy mature specialist capabilities and avoid rebuilding malware intelligence, file-transfer engines, DLP classification, or repository functions without a strong reason.
 
 ---
 
@@ -117,8 +133,10 @@ The collection component should be designed separately from the transfer compone
 - no arbitrary command execution exposed to requesters;
 - no use as a general administration proxy;
 - hash while collecting;
+- capture source-system identity, collection method/query, source timestamps/timezone where available, and collector timestamp;
 - write only to release quarantine;
-- complete evidence of source scope and collection result.
+- complete evidence of source scope and collection result;
+- support a preservation/legal-hold flag when collected material is incident or forensic evidence.
 
 ### Platform patterns
 
@@ -130,6 +148,8 @@ The collection component should be designed separately from the transfer compone
 | Database | Pre-approved read-only diagnostic query/export with field/row limits |
 | Kubernetes/container platform | Namespace/workload-scoped log export through platform API/service identity |
 | SaaS/cloud service | Provider export/API using scoped service identity and case-specific request |
+
+Collection for ordinary troubleshooting should prefer the smallest useful time range and source scope. Collection for incident/forensic purposes may instead require preservation of an immutable original; the releasable derivative can still be minimised/redacted without overwriting the preserved source copy.
 
 ---
 
@@ -146,10 +166,13 @@ Required controls:
 - malware/DLP workers receive read access only to required objects;
 - transfer worker can read only objects in `APPROVED_FOR_RELEASE` state;
 - automatic retention/expiry;
+- preservation/legal-hold override that prevents purge when required;
 - purge evidence;
 - storage keys/object IDs linked to canonical SHA-256.
 
 For a POC, separate S3-compatible buckets or filesystem-backed object stores are sufficient. For production, use the organisation's approved secure object-storage platform or an MFT product's secure staging capability only if it can enforce the same lifecycle/evidence requirements.
+
+The working evidence pattern is a shared database platform with bounded sibling schemas and service roles, pending [ADR-0015](adr/0015-data-release-evidence-store-boundary.md). Do not reuse package-intake tables merely because both workflows store state transitions.
 
 ---
 
@@ -196,7 +219,9 @@ A DLP/classification capability should support policy decisions based on:
 - custom dictionaries/patterns;
 - destination risk class.
 
-Hash-only public reputation services are not appropriate for DLP because the security question is the content itself, not only whether a file is known-malicious. Sensitive operational files should not be uploaded to public scanning services unless policy and contract explicitly permit it.
+Hash-only public reputation services are not appropriate for DLP because the security question is the content itself, not only whether a file is known-malicious. **Sensitive operational files, extracted text, archive members, or DLP evidence must not be sent to public scanning/AI/content services by default.** Any external processing service requires explicit policy, contractual, residency, and data-classification approval.
+
+Inspection findings and audit events should store masked values or finding fingerprints rather than copying full credentials, tokens, customer records, or sensitive text into logs and evidence systems unnecessarily.
 
 ---
 
@@ -214,7 +239,7 @@ Different data types require different techniques.
 | Memory/core dump | Prefer targeted diagnostic alternatives; if essential, elevated review and specialised tooling |
 | Screenshots/documents | Manual or tool-assisted redaction with verification |
 
-The transformation engine must produce a new object and new SHA-256. Never overwrite an already inspected/approved original in place.
+The transformation engine must produce a new object and new SHA-256. Never overwrite an already inspected/approved original in place. When the original is subject to incident-response, forensic, legal, or regulatory preservation, retain that original under restricted immutable hold and release only a separately derived candidate.
 
 ---
 
@@ -252,7 +277,26 @@ The broker is the enforcement point between approved release storage and the des
 - enterprise-managed secure exchange portal;
 - partner MFT endpoint.
 
-Where a vendor portal cannot be automated safely, the design may use a controlled human-assisted release step, but the final approved bytes and audit evidence must still remain bound to the case and destination. Browser upload from an unrestricted endpoint should not become the default architecture simply because it is convenient.
+### Human-assisted vendor portal upload
+
+Some vendor support portals expose only an interactive browser upload and no safe API/MFT integration. That should be treated as a **controlled exception path**, not as permission for a requester to download approved production data to an ordinary workstation and browse freely.
+
+A production human-assisted path should, where practical:
+
+- use a managed upload workstation, VDI/session, secure browser, or equivalent restricted environment;
+- allow only the approved vendor hostname/path and required identity-provider endpoints;
+- expose only the final `APPROVED_FOR_RELEASE` object to the upload operator;
+- re-verify the final hash immediately before upload;
+- prevent arbitrary local persistence, re-sharing, clipboard/export, or browsing where the platform supports those controls;
+- record the human upload operator, vendor case, destination, timestamp, final hash, and portal receipt/reference;
+- remove temporary local/session copies after completion;
+- require a new approval if the bundle or destination changes.
+
+Browser upload from an unrestricted endpoint should not become the default architecture simply because it is convenient.
+
+### Disconnected / highly segmented destinations
+
+Where no online transfer path is permitted, use an approved cross-domain guard, transfer appliance, or managed removable-media process rather than ad hoc USB copying. The process should retain the same release semantics: exact approved hash, encryption where required, media/transfer asset identity, chain-of-custody, malware/content inspection before export and after import, destination binding, no auto-execution, and sanitisation/return of reusable media according to enterprise policy.
 
 ---
 
@@ -269,7 +313,8 @@ Required or strongly preferred:
 - separate privileged identity required for any later change;
 - normal destination change-management controls remain in force;
 - local malware/content controls may re-scan on arrival;
-- retention/cleanup policy for the destination copy.
+- retention/cleanup policy for the destination copy;
+- where the destination is intended only for logs/data, deny or separately quarantine executable and change-capable file types by default rather than relying only on "do not execute" procedure.
 
 This is the primary technical control preventing the transfer channel from becoming a catastrophic-change mechanism.
 
@@ -283,13 +328,23 @@ Reuse is encouraged where the semantics match.
 |---|---|---|
 | IdP / OIDC | Yes | Same human/service identity foundation |
 | Request portal | Yes, with a separate request type/workflow | Do not reuse package states or fields blindly |
-| Evidence database | Yes, if schema cleanly separates lifecycle types | Shared audit primitives are useful |
+| Evidence database platform | Yes, subject to ADR-0015 | Prefer bounded sibling schemas/service roles rather than shared lifecycle tables |
 | Object store | Yes, using separate buckets/policies | Release quarantine has different access/retention semantics |
 | ClamAV/YARA | Yes | Malware remains relevant for cross-zone files |
 | Package SBOM/SCA | Generally no | Not the primary confidentiality control for logs/data |
 | Controlled downloader | No | Outbound release uses controlled collector + transfer broker instead |
 | Approved repository | No | Use release-approved staging/destination, not a consumable package repository |
-| Recheck/recall | Different | Outbound release focuses on cancel-before-transfer, disclosure response, purge, and audit |
+| Recheck/recall | Different | Outbound release focuses on cancel-before-transfer, disclosure response, preservation/purge, and audit |
+
+### Vendor-return content
+
+Do not map every vendor return directly into the package repository workflow. Route by content type:
+
+- package, binary, installer, script utility, patch → package/software intake and quarantine as applicable;
+- ordinary document, log, support output, archive → enterprise secure-file ingress/content inspection;
+- configuration or change instruction → inbound content inspection **plus** a separate change-management/privileged execution process.
+
+If the enterprise has not yet implemented a generic secure-file-ingress path for ordinary vendor data, hold that content in inbound quarantine and block use rather than treating a support-case association as trust.
 
 ---
 
@@ -304,7 +359,8 @@ A procurement exercise should score products/integrations against at least:
 - API/webhook integration with ITSM/workflow;
 - time-limited approvals and exceptions;
 - external case/vendor metadata;
-- tamper-evident audit.
+- tamper-evident audit;
+- legal hold/preservation and evidence retention.
 
 ### Content security
 
@@ -315,29 +371,42 @@ A procurement exercise should score products/integrations against at least:
 - on-prem/private processing options;
 - redaction/sanitisation support;
 - handling of encrypted/unsupported content;
-- large file, PCAP, dump, and archive limits.
+- large file, PCAP, dump, and archive limits;
+- masking/minimisation of findings written to logs/evidence.
 
 ### Transfer security
 
 - fixed destination profiles;
 - SFTP/HTTPS/object-store/partner connectors as required;
+- secure human-assisted browser upload for portals without APIs;
+- disconnected/cross-domain/removable-media support where required;
 - no general routing requirement;
 - encryption and key management;
 - retries/receipts/idempotency;
 - destination access controls;
-- ability to verify exact transferred hash/object.
+- ability to verify exact transferred hash/object;
+- support for non-executable staging and destination file-type policy.
 
 ### Operations
 
 - HA/DR;
 - monitoring and SIEM export;
-- retention and purge;
+- retention, preservation hold, and purge;
 - API quality;
 - upgrade/rollback;
 - vendor support;
 - data residency/sovereignty;
 - throughput and maximum file size;
 - predictable licensing/cost at expected transfer volume.
+
+### Vendor / data-processing governance
+
+- where inspection or storage occurs geographically;
+- whether content, extracted text, metadata, hashes, or findings are retained by the provider;
+- whether provider data may be used for threat intelligence, model training, or service improvement;
+- contractual deletion and support-case retention behavior;
+- subprocessor and cross-border processing model;
+- ability to keep sensitive production files fully on-premises/private when required.
 
 ---
 
@@ -356,7 +425,7 @@ flowchart LR
     Policy -->|approved hash + destination| MFT[MFT / Transfer Broker]
     MFT --> Internal[Internal support / lab]
     MFT --> Vendor[Vendor / partner endpoint]
-    Policy --> Evidence[(Evidence DB)]
+    Policy --> Evidence[(Bounded Data-Release Evidence Schema)]
     Collector --> Evidence
     Inspect --> Evidence
     Transform --> Evidence
@@ -364,7 +433,7 @@ flowchart LR
     Evidence --> SIEM[SIEM / Audit]
 ```
 
-The preferred enterprise pattern is usually **hybrid**: retain enterprise identity, ITSM, policy, and evidence ownership; buy or reuse mature DLP/content-security and MFT capabilities; build only the orchestration and enterprise-specific control bindings that are not available off the shelf.
+The **working recommendation**, pending ADR-0014, is hybrid: retain enterprise identity, ITSM, policy, canonical release state, and evidence ownership; buy or reuse mature private DLP/content-security and MFT capabilities; build only the orchestration and enterprise-specific control bindings that are not available off the shelf. The working evidence model, pending ADR-0015, is a bounded data-release schema/service role on a shared database platform rather than reuse of package lifecycle tables.
 
 ---
 
@@ -385,4 +454,4 @@ The companion POC uses deliberately simple substitutes:
 | Vendor portal | Mock HTTP upload endpoint |
 | SIEM | Structured audit events / optional existing observability stack |
 
-This keeps the demonstration deterministic and safe while preserving the architectural boundaries that matter.
+This keeps the demonstration deterministic and safe while preserving the architectural boundaries that matter. The POC choices do not resolve ADR-0014 or ADR-0015.

@@ -2,9 +2,9 @@
 
 > **Status: draft reference architecture and POC design, not a deployed control environment.** This repository documents proposed designs for two related enterprise control problems: **controlled software/artifact ingress** and **controlled operational-data release/cross-domain transfer**. Nothing in this repository should be treated as a production control until it has been implemented, tested, approved, and operated under the organisation's governance processes.
 >
-> The original package-intake architecture still has **9 open package/security architecture decisions**. A new repository-level decision, [ADR-0013](adr/0013-separate-ingress-and-data-release-control-planes.md), proposes keeping software ingress and operational-data release as separate sibling control planes that share platform primitives where appropriate. That makes **10 open decisions repository-wide** until ADR-0013 is reviewed. See [`adr/README.md`](adr/README.md).
+> The original package-intake architecture still has **9 open package/security architecture decisions**. Three additional proposed decisions now cover the new repository/data-release domain: [ADR-0013](adr/0013-separate-ingress-and-data-release-control-planes.md) (control-plane relationship), [ADR-0014](adr/0014-controlled-data-release-sourcing-strategy.md) (data-release sourcing strategy), and [ADR-0015](adr/0015-data-release-evidence-store-boundary.md) (evidence-store boundary). That makes **12 open architecture/sourcing decisions repository-wide**. See [`adr/README.md`](adr/README.md).
 
-This repository now describes a broader **controlled cross-boundary file movement** architecture with two distinct security directions.
+This repository describes a broader **controlled cross-boundary file movement** architecture with two distinct security directions.
 
 ## Domain 1 — Controlled software and artifact ingress
 
@@ -47,7 +47,7 @@ The proposed model uses:
 
 A transferred script, configuration, infrastructure-as-code file, SQL script, network configuration, or other change-capable content must remain inert in the destination staging location and require a separate privileged/change-management process before it can be applied.
 
-Files returned by a vendor after an outbound support interaction do **not** inherit trust from that support case: they return through the appropriate existing ingress/quarantine process.
+Files returned by a vendor after an outbound support interaction do **not** inherit trust from that support case. The return path is selected by content type: package/software/binaries return through package intake; ordinary documents/support data require secure inbound file quarantine/content inspection; configuration or change-capable content additionally requires the normal change-management and privileged-access process. If a generic secure-file-ingress capability has not yet been implemented, ordinary returned files must remain blocked in inbound quarantine rather than being treated as trusted.
 
 ## High-level relationship
 
@@ -55,7 +55,7 @@ Files returned by a vendor after an outbound support interaction do **not** inhe
 flowchart LR
     subgraph IN[Controlled ingress]
         A[Internet / vendor] --> B[Request + controlled fetch]
-        B --> C[Quarantine + supply-chain analysis]
+        B --> C[Package / software quarantine\nSupply-chain analysis]
         C --> D[Approved internal repository]
     end
 
@@ -65,7 +65,10 @@ flowchart LR
         G --> H[Approved destination transfer]
     end
 
-    H -. vendor return content .-> C
+    H -. vendor return .-> R{Returned content type?}
+    R -->|package / binary / utility| C
+    R -->|ordinary document / support data| J[Inbound file quarantine\nContent inspection]
+    R -->|configuration / change instruction| K[Inbound inspection +\nseparate change management]
 ```
 
 The two domains can share identity, workflow, evidence, object storage, malware scanning, monitoring, and policy infrastructure, but they use different lifecycle states and approval semantics.
@@ -77,12 +80,12 @@ The two domains can share identity, workflow, evidence, object storage, malware 
 | Document | Purpose |
 |---|---|
 | [`package-intake-architecture.md`](package-intake-architecture.md) | **Ingress architecture.** The control-focused target architecture for packages/software/models: stages, control objectives, data flows, artifact paths, and the artifact lifecycle state machine. Product-neutral where possible. |
-| [`controlled-data-release-architecture.md`](controlled-data-release-architecture.md) | **NEW — outbound/cross-domain architecture.** Functional and non-functional security requirements for operational logs/data, controlled collection, release quarantine, DLP/secrets inspection, redaction, destination binding, cross-domain transfer, audit, and prevention of catastrophic changes through the transfer channel. |
+| [`controlled-data-release-architecture.md`](controlled-data-release-architecture.md) | **Outbound/cross-domain architecture.** Functional and non-functional security requirements for operational logs/data, controlled collection, release quarantine, DLP/secrets inspection, redaction, destination binding, cross-domain transfer, audit, and prevention of catastrophic changes through the transfer channel. |
 | [`solution-architecture-tooling.md`](solution-architecture-tooling.md) | Detailed implementation guide for the package-intake architecture: specific tools, licensing/edition trade-offs, deployment commands, and phased rollout plan. |
-| [`controlled-data-release-tooling.md`](controlled-data-release-tooling.md) | **NEW — implementation/procurement companion.** Capability categories and build/buy/hybrid patterns for controlled collection, DLP, secrets detection, redaction, release quarantine, Managed File Transfer, destination-side protections, and integration with existing package-intake platform services. |
+| [`controlled-data-release-tooling.md`](controlled-data-release-tooling.md) | **Implementation/procurement companion.** Capability categories and build/buy/hybrid patterns for controlled collection, DLP, secrets detection, redaction, release quarantine, Managed File Transfer, destination-side protections, and integration with existing package-intake platform services. Its working sourcing direction is tracked in ADR-0014. |
 | [`architecture-tooling-review.md`](architecture-tooling-review.md) | Independent review of the package-intake architecture/tooling documents, tracked as a living document with resolution and outstanding-work status. |
-| [`enterprise-build-vs-buy-evaluation.md`](enterprise-build-vs-buy-evaluation.md) | Enterprise requirements and build/buy/hybrid analysis for controlled software and file ingress. The controlled-data-release tooling guide adds secure operational-data release / cross-domain transfer as a fourth capability domain for future procurement analysis. |
-| [`adr/README.md`](adr/README.md) | **The decision register.** Architecture Decision Records — one file per undecided or settled cross-cutting decision. ADR-0013 introduces the proposed sibling-control-plane model. |
+| [`enterprise-build-vs-buy-evaluation.md`](enterprise-build-vs-buy-evaluation.md) | Enterprise requirements and build/buy/hybrid analysis for **controlled software and file ingress**. It remains intentionally ingress-scoped; controlled-data-release sourcing is tracked separately in ADR-0014 and `controlled-data-release-tooling.md`. |
+| [`adr/README.md`](adr/README.md) | **The decision register.** Architecture Decision Records — one file per undecided or settled cross-cutting architecture/sourcing decision. |
 
 ### Proof of concept and demonstration
 
@@ -90,7 +93,7 @@ The two domains can share identity, workflow, evidence, object storage, malware 
 |---|---|
 | [`poc-deployment-plan.md`](poc-deployment-plan.md) | The deliberately reduced package-intake POC scope: identity model, container/VM topologies, sizing, use cases, failure simulations, acceptance criteria, and alternatives considered. |
 | [`poc-build-runbook.md`](poc-build-runbook.md) | Package-intake POC build procedure, service layout, safe test fixtures, operating runbook, demo script, troubleshooting, reset, and shutdown actions. |
-| [`controlled-data-release-poc.md`](controlled-data-release-poc.md) | **NEW — POC extension and demo runbook.** Adds a synthetic production log source, release quarantine, deterministic secrets/DLP findings, redaction, destination binding, mock OA/vendor destinations, hash/destination substitution tests, vendor-return routing, and a demonstration that file transfer cannot automatically execute a change. |
+| [`controlled-data-release-poc.md`](controlled-data-release-poc.md) | **POC extension and demo runbook.** Adds a synthetic production log source, release quarantine, deterministic secrets/DLP findings, redaction, destination binding, mock OA/vendor destinations, hash/destination substitution tests, vendor-return routing, and a demonstration that file transfer cannot automatically execute a change. |
 
 ## Supporting materials
 
@@ -107,22 +110,25 @@ The two domains can share identity, workflow, evidence, object storage, malware 
 3. Read the architecture relevant to the use case:
    - [`package-intake-architecture.md`](package-intake-architecture.md) for external packages/software/artifacts entering the enterprise;
    - [`controlled-data-release-architecture.md`](controlled-data-release-architecture.md) for internal operational data leaving a trust zone or crossing to another network.
-4. Check [`adr/README.md`](adr/README.md) for open decisions before treating any working assumption as final.
+4. Check [`adr/README.md`](adr/README.md) for open architecture/sourcing decisions before treating any working assumption as final.
 
 ### For package/software ingress
 
 1. `package-intake-architecture.md` — target control model.
 2. `architecture-tooling-review.md` — review findings and resolution status.
-3. `enterprise-build-vs-buy-evaluation.md` — sourcing strategy and commercial/open-source/hybrid options.
-4. `solution-architecture-tooling.md` — detailed implementation options.
-5. `poc-deployment-plan.md` then `poc-build-runbook.md` — demonstration implementation.
+3. `enterprise-build-vs-buy-evaluation.md` — ingress sourcing strategy and commercial/open-source/hybrid options.
+4. ADR-0012 — confirm the ingress build/buy/hybrid direction.
+5. `solution-architecture-tooling.md` — detailed implementation options.
+6. `poc-deployment-plan.md` then `poc-build-runbook.md` — demonstration implementation.
 
 ### For operational-data release / troubleshooting
 
 1. `controlled-data-release-architecture.md` — functional and security requirements, lifecycle, and cross-domain boundaries.
-2. `controlled-data-release-tooling.md` — implementation and procurement capability map.
-3. `controlled-data-release-poc.md` — deterministic demo design and runbook.
-4. ADR-0013 — confirm whether the sibling-control-plane structure has been accepted before production design is finalised.
+2. ADR-0013 — confirm the sibling-control-plane structure.
+3. ADR-0014 — confirm the data-release build/buy/hybrid sourcing strategy.
+4. ADR-0015 — confirm the evidence-store/schema boundary.
+5. `controlled-data-release-tooling.md` — implementation and procurement capability map.
+6. `controlled-data-release-poc.md` — deterministic demo design and runbook.
 
 ## POC recommendation in one paragraph
 
