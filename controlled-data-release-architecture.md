@@ -5,11 +5,18 @@
 | Field | Value |
 |---|---|
 | Document title | Controlled Operational Data Release and Cross-Domain Transfer — Reference Architecture |
-| Version | 0.1 |
+| Version | 0.2 |
 | Status | Draft for architecture and security review |
 | Owner | Security Architecture |
 | Last updated | 2026-08-10 |
-| Related documents | [`package-intake-architecture.md`](package-intake-architecture.md), [`solution-architecture-tooling.md`](solution-architecture-tooling.md), [`controlled-data-release-poc.md`](controlled-data-release-poc.md), [`adr/0013-separate-ingress-and-data-release-control-planes.md`](adr/0013-separate-ingress-and-data-release-control-planes.md) |
+| Related documents | [`package-intake-architecture.md`](package-intake-architecture.md), [`controlled-data-release-tooling.md`](controlled-data-release-tooling.md), [`controlled-data-release-poc.md`](controlled-data-release-poc.md), [ADR-0013](adr/0013-separate-ingress-and-data-release-control-planes.md), [ADR-0014](adr/0014-controlled-data-release-sourcing-strategy.md), [ADR-0015](adr/0015-data-release-evidence-store-boundary.md) |
+
+### Revision history
+
+| Version | Date | Author | Summary of changes |
+|---|---|---|---|
+| 0.1 | 2026-08-10 | Security Architecture | Initial controlled operational-data release and cross-domain transfer reference architecture |
+| 0.2 | 2026-08-10 | Security Architecture | Reconciled ADR/sourcing/evidence boundaries; clarified vendor-return routing; added private-inspection, human-assisted portal, disconnected-transfer, forensic chain-of-custody/legal-hold, source-provenance, and evidence-minimisation requirements |
 
 > **Status: draft reference architecture, not a deployed control environment.** This document defines a sibling control plane to the package/software intake architecture. It covers outbound and cross-domain movement of operational data such as logs, traces, crash dumps, packet captures, configuration extracts, diagnostic bundles, database extracts, and troubleshooting files. It does not authorise a transfer merely by describing it; implementation, policy approval, data classification, legal/privacy requirements, and operational ownership remain required.
 
@@ -25,6 +32,7 @@ Operational troubleshooting creates the inverse problem. Engineers and support t
 - from production to a lower-trust test, development, laboratory, or vendor-support network;
 - from non-production to another segmented network;
 - from an internal environment to an external vendor support portal;
+- into a disconnected or highly segmented troubleshooting environment;
 - from an external vendor back into the enterprise after analysis or remediation.
 
 The primary risks are therefore different. The principal questions are:
@@ -36,6 +44,7 @@ The primary risks are therefore different. The principal questions are:
 5. **Can the transfer occur without creating an administrative or routable bridge between security zones?**
 6. **Can transferred content be prevented from automatically executing or applying a catastrophic change?**
 7. **Can the organisation prove exactly what was released, by whom, to where, and under which business purpose?**
+8. **If the material is incident or forensic evidence, can the original bytes and collection provenance be preserved without weakening the releasable-data controls?**
 
 This architecture answers those questions through a dedicated **controlled data release** lifecycle rather than treating logs and diagnostic files as another package-intake artifact class.
 
@@ -48,7 +57,7 @@ flowchart LR
     subgraph INGRESS[Controlled software / file ingress]
         I1[Internet / vendor sources] --> I2[Request + approval]
         I2 --> I3[Controlled fetch]
-        I3 --> I4[Quarantine]
+        I3 --> I4[Package / software quarantine]
         I4 --> I5[Integrity / malware / provenance]
         I5 --> I6[Testing + promotion]
         I6 --> I7[Approved internal repository]
@@ -63,12 +72,17 @@ flowchart LR
         E6 --> E7[Bound destination transfer]
     end
 
-    E7 -. vendor return files .-> I4
+    E7 -. vendor return .-> R{Returned content type?}
+    R -->|package / binary / utility| I4
+    R -->|ordinary file / support data| F1[Inbound file quarantine\nContent inspection]
+    R -->|configuration / change instruction| F2[Inbound inspection +\nseparate change process]
 ```
 
-The two control planes may share identity, request workflow, audit, object storage, evidence database, security monitoring, and policy engines. They must not share assumptions about what constitutes approval.
+The two control planes may share identity, request workflow, audit, object storage, evidence database platform, security monitoring, and policy engines. They must not share assumptions about what constitutes approval or reuse lifecycle tables merely because both workflows store state transitions.
 
 **Transfer authorisation is not change authorisation.** Moving a file into another network must never, by itself, permit software installation, script execution, configuration import, firewall changes, infrastructure-as-code execution, database changes, or privileged administration.
+
+The top-level separation is tracked in [ADR-0013](adr/0013-separate-ingress-and-data-release-control-planes.md). The data-release sourcing strategy and evidence-store boundary are tracked separately in ADR-0014 and ADR-0015.
 
 ---
 
@@ -99,9 +113,16 @@ This document does not define:
 - bulk data-platform replication;
 - backup replication;
 - software/package acquisition from the internet, which remains governed by `package-intake-architecture.md`;
+- a complete enterprise secure-file-ingress architecture for arbitrary inbound documents/data;
 - implementation of a change into a destination environment after a file has been transferred.
 
-Where an outbound support interaction results in a vendor returning a script, patch, executable, configuration package, diagnostic utility, or other file, the returned content enters the existing ingress/quarantine process. An outbound approval never creates a trusted inbound path.
+Where an outbound support interaction results in a vendor returning content, an outbound approval never creates a trusted inbound path. Returned content is routed by type:
+
+- package/software/binary/diagnostic utility → package/software intake and quarantine as applicable;
+- ordinary document/log/support output/archive → enterprise secure-file ingress/content inspection;
+- configuration or change-capable instructions → inbound content inspection plus the destination's separate change-management and privileged-access process.
+
+If a generic secure-file-ingress capability has not yet been implemented for ordinary vendor-return data, that content must remain blocked in inbound quarantine until an appropriate inspection/release control exists. A support-case relationship is not a substitute for inbound inspection.
 
 ---
 
@@ -129,7 +150,7 @@ Expected controls:
 - malware and file-type inspection;
 - release manifest and hashes;
 - approved internal destination binding;
-- automatic expiry/purge of staging copies.
+- automatic expiry/purge of staging copies unless retention/legal hold applies.
 
 ### UC-DR-02 — Production to test/lab/alternative network
 
@@ -170,15 +191,32 @@ The release must be bound to:
 - time-limited release approval;
 - approved retention or deletion expectation where contractually available.
 
+Where the vendor portal exposes no safe API/MFT integration, a managed human-assisted upload path may be used only under the same final-hash/destination approval, with a restricted upload workstation/session, portal allowlisting, immediate pre-upload hash verification, operator audit, receipt capture, and cleanup of temporary session copies.
+
 ### UC-DR-04 — Vendor return path
 
-A vendor may provide a diagnostic utility, script, configuration file, patch, package, modified binary, or troubleshooting output back to the organisation.
+A vendor may provide a diagnostic utility, script, configuration file, patch, package, modified binary, troubleshooting output, document, or archive back to the organisation.
 
-The return path is **not covered by the outbound release approval**. Returned files must follow the appropriate existing ingress process:
+The return path is **not covered by the outbound release approval**. Returned files must follow the appropriate inbound process:
 
-- package/software/binary content → package intake/quarantine;
-- ordinary documents/data → secure file ingress/content inspection;
-- configuration/change instructions → separate change-management and privileged-access process.
+- package/software/binary/utility content → package intake/quarantine;
+- ordinary documents/data → secure file ingress/content inspection, or blocked inbound quarantine until such a control exists;
+- configuration/change instructions → inbound inspection and then a separate change-management and privileged-access process.
+
+### UC-DR-05 — Disconnected or highly segmented destination
+
+A troubleshooting team needs approved data in a destination that cannot accept online MFT/HTTPS/SFTP connectivity, such as an isolated lab, air-gapped enclave, or highly segmented security zone.
+
+The release lifecycle and final approval do not change. The transport stage uses an approved cross-domain guard, transfer appliance, or managed removable-media process with:
+
+- exact final approved hash and manifest;
+- encryption where required;
+- transfer appliance/media asset identity;
+- documented custody between release and import;
+- malware/content inspection before export and after import;
+- destination binding and named receiving party;
+- no automatic execution/import on arrival;
+- media sanitisation, destruction, or controlled reuse after transfer according to policy.
 
 ---
 
@@ -208,13 +246,14 @@ flowchart TB
     R -->|no| Q2
 
     Q2 --> A[Release Approval Gate]
-    A --> B[Transfer Broker / MFT]
+    A --> B[Transfer Broker / MFT / Controlled Export]
 
     B --> OA[Internal OA / support location]
     B --> LAB[Test / lab network]
     B --> V[Allowlisted vendor portal]
+    B --> ISO[Disconnected / segmented transfer]
 
-    P --> E[(Evidence + Audit Database)]
+    P --> E[(Data-Release Evidence + Audit)]
     C --> E
     Q --> E
     F --> E
@@ -233,7 +272,7 @@ The data-release control plane may reuse components from the package-intake plat
 - enterprise identity provider;
 - request/approval portal;
 - policy engine;
-- evidence database;
+- evidence database platform;
 - immutable object storage;
 - malware scanning;
 - YARA/file-type validation;
@@ -246,10 +285,12 @@ It adds data-release-specific capabilities:
 - DLP/content classification;
 - secrets detection;
 - redaction/sanitisation;
-- managed file transfer or transfer broker;
+- managed file transfer, controlled browser upload, cross-domain export, or transfer broker;
 - destination binding;
 - transfer receipts and confirmation;
-- release-specific retention and purge.
+- release-specific retention, preservation hold, and purge.
+
+The working evidence boundary is a shared database platform with bounded sibling schemas/service roles, pending [ADR-0015](adr/0015-data-release-evidence-store-boundary.md).
 
 ---
 
@@ -262,7 +303,9 @@ It adds data-release-specific capabilities:
 | Data owner / release approver | Approve disclosure to the stated destination | Platform administration |
 | Security/privacy reviewer | Review elevated-risk findings, sensitive data, exceptions | Ability to alter source logs or silently bypass evidence |
 | Collection service | Read only the approved source scope and write release quarantine | Interactive shell, broad domain admin, destination administration |
+| Inspection/redaction service | Inspect/transform only assigned quarantine objects | Unrestricted source/destination access or external data submission |
 | Transfer service | Read only approved release bundles and write to approved destination | Source-system administration or arbitrary internet access |
+| Human upload operator | Upload only the approved final bundle through a controlled session where automation is unavailable | Authority to alter bundle/destination or retain unrestricted local copies |
 | Platform administrator | Operate the transfer platform | Default right to approve business releases |
 | Auditor | Read evidence and history | Workflow mutation |
 
@@ -301,15 +344,20 @@ The requirements below are deliberately written as testable statements so they c
 | FR-DR-023 | The solution shall support internal destinations such as controlled file shares, object stores, support zones, and test/lab staging locations. |
 | FR-DR-024 | The solution shall record transfer time, transfer identity, destination, byte count, outcome, and receipt/confirmation where the destination provides one. |
 | FR-DR-025 | Release approvals shall expire and shall not create permanent open transfer permissions. |
-| FR-DR-026 | Temporary release-quarantine and transfer-staging copies shall expire and be purged according to policy. |
+| FR-DR-026 | Temporary release-quarantine and transfer-staging copies shall expire and be purged according to policy unless a preservation/legal hold applies. |
 | FR-DR-027 | Rejected and blocked releases shall retain decision evidence while restricting access to the rejected bytes. |
 | FR-DR-028 | The solution shall support an emergency incident workflow with elevated authorisation, explicit reason, time-limited access, and retrospective review. |
-| FR-DR-029 | A file returned by an external vendor shall be routed to the appropriate ingress/quarantine process and shall never be treated as trusted solely because a related outbound support case was approved. |
+| FR-DR-029 | A file returned by an external vendor shall be routed to the appropriate inbound quarantine/inspection process and shall never be treated as trusted solely because a related outbound support case was approved. |
 | FR-DR-030 | The solution shall expose an auditable history of every state transition, actor, decision, policy version, scanner version, evidence reference, and exception. |
 | FR-DR-031 | The workflow shall allow a release to be suspended or cancelled before transfer when new risk is identified. |
 | FR-DR-032 | For structured extracts, the workflow should support limits on record count, query scope, columns/fields, and sampling so data minimisation can be enforced rather than documented only as prose. |
 | FR-DR-033 | The requester shall be able to see release status and required remediation without being granted access to other requesters' sensitive release bundles. |
 | FR-DR-034 | The system shall support policy-defined legal/privacy/export-control review routing where jurisdiction, contract, classification, or destination requires it. |
+| FR-DR-035 | Collection evidence shall record source-system identity, collection method/API/query/path, requested and actual time window, collector identity, and relevant source timestamp/timezone or clock reference where available. |
+| FR-DR-036 | The workflow shall support an incident/forensic preservation flag that prevents automatic purge of original collected bytes and records chain-of-custody events independently from any redacted/releasable derivative. |
+| FR-DR-037 | Where an external vendor requires interactive browser upload, the solution/process shall restrict the operator to the approved final bytes and destination, re-verify the final hash before upload, capture the operator and portal receipt/reference, and remove temporary upload-session copies. |
+| FR-DR-038 | Ordinary vendor-return documents/data shall remain in inbound quarantine until secure file/content inspection has completed; absence of a generic file-ingress implementation shall block use rather than downgrade trust requirements. |
+| FR-DR-039 | The solution shall support approved disconnected/highly segmented transfer methods while retaining final-hash, destination, custody, inspection, encryption, receipt/import, and no-auto-execution controls. |
 
 ---
 
@@ -325,6 +373,8 @@ The requirements below are deliberately written as testable statements so they c
 | NFR-SEC-DR-004 | Destination-side transfer services shall initiate only allowlisted destination protocols and endpoints. |
 | NFR-SEC-DR-005 | The source environment shall not be able to use the transfer service as an unrestricted internet-egress path. |
 | NFR-SEC-DR-006 | The destination environment shall not gain a routable return path into production through the transfer service. |
+| NFR-SEC-DR-007 | A human-assisted vendor-upload session shall be restricted to approved vendor destinations and shall not provide unrestricted browsing or arbitrary file selection from the operator workstation. |
+| NFR-SEC-DR-008 | Disconnected/removable-media transfer shall use approved media/appliance controls, encryption where required, asset/custody tracking, inspection at both boundaries, and sanitisation or controlled reuse. |
 
 ### 8.2 Privilege and catastrophic-change prevention
 
@@ -339,6 +389,7 @@ The requirements below are deliberately written as testable statements so they c
 | NFR-SEC-DR-016 | A transfer approval shall not be accepted as evidence of approval to deploy or execute the transferred content. |
 | NFR-SEC-DR-017 | Shared domain-administrator, root, or equivalent broad administrative credentials shall not be used as the normal mechanism for file collection or transfer. |
 | NFR-SEC-DR-018 | Privileged break-glass collection shall be time-limited, strongly authenticated, separately audited, and reviewed after use. |
+| NFR-SEC-DR-019 | Destinations intended only for logs/data should block or separately quarantine executable and change-capable file types by default, rather than relying solely on procedural instructions not to execute them. |
 
 **Control objective DR-C08 — prevent transfer capability from becoming a change channel:** file-transfer functions must not provide a path for privileged administrative change across security boundaries. Defence in depth should combine no general routing, separate service identities, least privilege, non-executable staging, explicit release destination binding, separate change approval, and full audit.
 
@@ -348,13 +399,16 @@ The requirements below are deliberately written as testable statements so they c
 |---|---|
 | NFR-SEC-DR-020 | Release candidates shall be scanned for credentials, secrets, keys, tokens, sensitive identifiers, and organisation-defined data classifications. |
 | NFR-SEC-DR-021 | Production-to-lower-trust and external-vendor releases shall apply data-minimisation policy by default. |
-| NFR-SEC-DR-022 | Memory dumps, core dumps, packet captures, database exports, authentication logs, and identity-system diagnostics shall be classified as elevated-risk data types by default. |
+| NFR-SEC-DR-022 | Memory dumps, core dumps, packet captures, database exports, authentication logs, identity-system diagnostics, and incident/forensic evidence shall be classified as elevated-risk data types by default. |
 | NFR-SEC-DR-023 | Encrypted/password-protected archives that cannot be inspected shall not receive a clean verdict; they shall be `INCONCLUSIVE` or blocked according to policy. |
 | NFR-SEC-DR-024 | Nested archives, archive bombs, excessive compression ratios, malformed files, and parser abuse shall be constrained with maximum depth, size, expansion ratio, and processing time. |
 | NFR-SEC-DR-025 | Redaction workspaces shall protect originals from normal consumers and preserve evidence of which transformation produced the final release bytes. |
 | NFR-SEC-DR-026 | External release shall be restricted to the minimum data necessary for the stated support purpose. |
+| NFR-SEC-DR-027 | Sensitive operational files, extracted content, archive members, or DLP/secrets evidence shall not be submitted to public or unapproved external scanning/AI/content services; external processing requires explicit data-classification, contractual, residency, and policy approval. |
+| NFR-SEC-DR-028 | Audit and finding records shall minimise sensitive values and should store masked previews/fingerprints rather than full passwords, tokens, private keys, customer records, or other detected secrets unless full content is explicitly required and protected. |
+| NFR-SEC-DR-029 | Inspection/redaction service identities shall not have unrestricted internet egress or unrelated source/destination access; a malicious or compromised scanner must not become an exfiltration path. |
 
-### 8.4 Integrity and non-repudiation
+### 8.4 Integrity, provenance, and non-repudiation
 
 | ID | Security requirement |
 |---|---|
@@ -362,6 +416,9 @@ The requirements below are deliberately written as testable statements so they c
 | NFR-SEC-DR-031 | The final release approval shall reference the final release hash, destination, request ID, and approval identity. |
 | NFR-SEC-DR-032 | Evidence and lifecycle transitions shall be append-only or otherwise tamper-evident. |
 | NFR-SEC-DR-033 | The organisation shall be able to demonstrate that the bytes transferred match the bytes approved for release. |
+| NFR-SEC-DR-034 | Collection evidence shall preserve enough source and timing context to reconstruct how the bytes were obtained; for incident/forensic use, chain-of-custody events and immutable original hashes shall be retained. |
+| NFR-SEC-DR-035 | Redaction, sanitisation, archive rebuilding, or other transformations shall create traceable derivative objects and shall never overwrite the preserved original when preservation/legal hold applies. |
+| NFR-SEC-DR-036 | A preservation/legal hold shall prevent purge of protected originals and associated evidence until an authorised hold-release action occurs. |
 
 ### 8.5 Encryption and key management
 
@@ -379,15 +436,15 @@ The requirements below are deliberately written as testable statements so they c
 | NFR-SEC-DR-050 | Failure of DLP, malware scanning, secrets detection, destination validation, or evidence recording shall not silently downgrade to an allow decision. |
 | NFR-SEC-DR-051 | Retries shall be idempotent and shall not create duplicate releases or bypass approval state. |
 | NFR-SEC-DR-052 | Evidence records shall survive restart and partial platform outage. |
-| NFR-SEC-DR-053 | The platform shall expose sufficient operational metrics to identify stuck requests, scan backlog, transfer failures, purge failures, and policy bypass attempts. |
+| NFR-SEC-DR-053 | The platform shall expose sufficient operational metrics to identify stuck requests, scan backlog, transfer failures, purge failures, preservation-hold violations, and policy bypass attempts. |
 
 ### 8.7 Audit and monitoring
 
 | ID | Security requirement |
 |---|---|
-| NFR-SEC-DR-060 | All collection, inspection, redaction, approval, transfer, purge, and exception actions shall produce timestamped audit events. |
-| NFR-SEC-DR-061 | Audit events shall record human or service identity, request ID, source, destination, final hash, action, outcome, and policy/evidence references. |
-| NFR-SEC-DR-062 | Security monitoring shall alert on repeated blocked releases, attempts to use unauthorised destinations, bypassed inspection, unexpected privileged account use, and failed purge/retention controls. |
+| NFR-SEC-DR-060 | All collection, inspection, redaction, approval, transfer, preservation-hold, purge, and exception actions shall produce timestamped audit events. |
+| NFR-SEC-DR-061 | Audit events shall record human or service identity, request ID, source, collection method/scope, destination, final hash, action, outcome, and policy/evidence references. |
+| NFR-SEC-DR-062 | Security monitoring shall alert on repeated blocked releases, attempts to use unauthorised destinations, bypassed inspection, unexpected privileged account use, failed purge/retention controls, and attempts to release data through unapproved external processing services. |
 
 ---
 
@@ -403,6 +460,7 @@ Some diagnostic artifacts should not be treated as ordinary log files.
 | Identity/authentication logs | May expose usernames, tokens, IPs, authentication patterns | Security review and targeted redaction |
 | Configuration export | Can include secrets, SNMP strings, cloud keys, network topology | Secrets scan, remove credentials, separate change control on destination |
 | Support bundle | Frequently mixes logs, config, dumps, certificates, and environment data | Treat as compound archive; recursively inspect every member |
+| Incident/forensic evidence | May be needed later to prove sequence, integrity, or legal facts; redaction can alter evidentiary value | Preserve immutable original and collection provenance under restricted hold; create a separate releasable derivative |
 
 ---
 
@@ -431,7 +489,11 @@ Destination controls should therefore support:
 - approved internal file-share or object-store targets;
 - destination-side service identities scoped to a specific drop location;
 - expiry and revocation of temporary destination authorisation;
-- prevention of user-specified arbitrary destinations by the automated transfer service.
+- prevention of user-specified arbitrary destinations by the automated transfer service;
+- controlled human-assisted browser upload where no safe automated integration exists;
+- approved cross-domain/removable-media destination profiles for disconnected environments.
+
+For a human-assisted browser upload, the release approval still binds the final hash and destination. The operator must not be allowed to substitute another file or browse to another destination after approval.
 
 ---
 
@@ -488,23 +550,24 @@ stateDiagram-v2
 - `TRANSFERRED` means the transfer service completed its operation; it does not mean the vendor actually processed the file.
 - `RECEIPT_CONFIRMED` records a destination receipt where available.
 - `PURGED` means temporary staging copies have been deleted in accordance with retention policy; audit/evidence records remain according to policy.
+- **Preservation/legal hold is an orthogonal policy flag rather than a release state.** When active, it prevents protected original objects/evidence from transitioning into purge processing until an authorised hold-release action is recorded. A releasable redacted derivative may still proceed through the normal lifecycle.
 
 ### Required evidence by key transition
 
 | Transition | Required evidence |
 |---|---|
 | `REQUESTED -> APPROVED_TO_COLLECT` | Requester, source, purpose, target data scope, destination, risk classification, distinct approver where required |
-| `COLLECTING -> COLLECTED` | Collector identity, source path/query/scope, timestamps, file list, sizes, hashes |
+| `COLLECTING -> COLLECTED` | Collector identity, source system, collection method/path/query/scope, requested/actual time window, source timestamp/timezone where available, file list, sizes, hashes |
 | `QUARANTINED -> INSPECTING` | Job identity, policy version, scanner versions |
-| `INSPECTING -> REDACTION_REQUIRED` | Findings and affected files/locations |
-| `REDACTION_REQUIRED -> INSPECTING` | Transformation record, new candidate hash, operator/service identity |
+| `INSPECTING -> REDACTION_REQUIRED` | Findings and affected files/locations, with sensitive values masked in routine evidence |
+| `REDACTION_REQUIRED -> INSPECTING` | Transformation record, parent/original object reference, new candidate hash, operator/service identity |
 | `INSPECTING -> READY_FOR_RELEASE` | Malware, secrets, DLP/classification results and final manifest |
 | `READY_FOR_RELEASE -> APPROVED_FOR_RELEASE` | Release approver, destination, final hash, expiry, exception references |
-| `TRANSFERRING -> TRANSFERRED` | Transfer identity, endpoint/profile, timestamp, byte count, remote transaction/receipt ID where available |
+| `TRANSFERRING -> TRANSFERRED` | Transfer identity or human upload operator, endpoint/profile, timestamp, byte count, verified final hash, remote transaction/receipt ID where available |
 | `TRANSFERRED -> RECEIPT_CONFIRMED` | Vendor/internal receipt or case reference update |
-| `PURGE_PENDING -> PURGED` | Purge job identity, object/version IDs deleted, timestamp, failure-free confirmation |
+| `PURGE_PENDING -> PURGED` | Purge job identity, object/version IDs deleted, timestamp, failure-free confirmation, confirmation no active hold applies |
 
-The evidence database should use an append-only transition history or equivalent tamper-evident model, following the same general rationale as the package-intake lifecycle state machine.
+The evidence database should use an append-only transition history or equivalent tamper-evident model, following the same general rationale as the package-intake lifecycle state machine. The working database boundary is tracked in ADR-0015.
 
 ---
 
@@ -530,6 +593,8 @@ The organisation should preserve enough evidence to explain:
 - which final bytes were approved;
 - whether the original bytes were retained, for how long, and under what access controls.
 
+For ordinary troubleshooting, originals should be retained only as long as policy requires. For incident/forensic/legal material, the original may need immutable preservation under legal/evidence hold even though only a minimised derivative is released externally.
+
 ---
 
 ## 13. Preventing catastrophic change through the transfer channel
@@ -542,12 +607,13 @@ Recommended design controls:
 
 1. destination is a staging/drop location, not a live configuration directory;
 2. staging locations are non-executable where feasible;
-3. transfer service has no deployment/orchestration privileges;
-4. no hooks automatically execute newly arrived files;
-5. destination administrators use separate privileged identities;
-6. actual implementation requires the destination's normal change-management process;
-7. code/configuration content remains subject to local security validation before execution;
-8. audit clearly distinguishes `TRANSFERRED` from `DEPLOYED` or `APPLIED` — the latter states do not belong to this lifecycle.
+3. destinations intended only for logs/data block or separately quarantine executable/change-capable file types by default;
+4. transfer service has no deployment/orchestration privileges;
+5. no hooks automatically execute newly arrived files;
+6. destination administrators use separate privileged identities;
+7. actual implementation requires the destination's normal change-management process;
+8. code/configuration content remains subject to local security validation before execution;
+9. audit clearly distinguishes `TRANSFERRED` from `DEPLOYED` or `APPLIED` — the latter states do not belong to this lifecycle.
 
 This separation is intended to limit the blast radius of both operator error and a compromised transfer platform.
 
@@ -569,9 +635,11 @@ The release-inspection stage should implement:
 - quarantine of malformed or unsupported content;
 - malware scanning;
 - YARA/signature scanning where appropriate;
-- secrets and DLP inspection.
+- secrets and DLP inspection;
+- private processing by default for sensitive operational content;
+- masked/minimised findings in audit/evidence.
 
-An uninspectable file is not equivalent to a clean file.
+An uninspectable file is not equivalent to a clean file. A scanner or DLP service must not become a new exfiltration channel merely because it is part of the security pipeline.
 
 ---
 
@@ -588,6 +656,8 @@ A technically secure transfer can still leak data if business ownership and rele
 - release expiry and retention expectations;
 - a record of the data owner/release approver;
 - evidence that the final release candidate is the object actually approved;
+- source/collection provenance appropriate to the troubleshooting or incident purpose;
+- preservation/legal-hold handling when the original material is evidence;
 - closure or purge action after the troubleshooting activity completes.
 
 ### Emergency troubleshooting
@@ -599,6 +669,7 @@ Incident response may require faster handling, but the process should remain con
 - narrowly scoped collection;
 - time-limited approval;
 - full logging;
+- preservation of relevant original evidence where required;
 - no bypass of mandatory malware/DLP controls unless an explicitly recorded exception is authorised;
 - retrospective review within an organisation-defined period.
 
@@ -612,10 +683,12 @@ A completed transfer should be reconstructable from evidence similar to:
 Release ID:        DR-2026-001482
 Requester:         user@example
 Source:            PROD-APP-17
+Collection method: restricted log-export API
 Source scope:      /var/log/app/* 10:00-11:00 UTC
 Purpose:           Vendor troubleshooting
 Vendor:            ExampleVendor
 Vendor case:       INC-928211
+Preservation hold: no
 
 Original files:    7
 Original bytes:    143,219,118
@@ -623,7 +696,7 @@ Original bundle:   SHA256:...
 
 Inspection:
   Malware:         PASS
-  Secrets:         3 findings
+  Secrets:         3 findings (masked)
   DLP:             12 customer identifiers
   Archive:         PASS
 
@@ -642,6 +715,8 @@ Remote receipt:       ...
 Purge completed:      ...
 ```
 
+For incident/forensic material, the record should additionally capture collection timestamps/time reference, preservation-hold status, and custody events for the immutable original.
+
 ---
 
 ## 17. Security monitoring and abuse cases
@@ -652,25 +727,31 @@ Monitoring should explicitly detect or investigate:
 - attempts to bypass redaction by renaming or encrypting archives;
 - requests to send data to destinations not associated with the stated vendor/project;
 - attempts to use transfer workers as arbitrary internet proxies;
+- attempts by scanners/redaction services to send sensitive content to unapproved external services;
 - privileged interactive logins using service identities;
 - files changed after approval but before transfer;
 - transfer of a hash that does not match the approved hash;
 - requests created and approved by the same identity where separation is required;
 - unusually large or repeated memory dumps/packet captures;
 - purge jobs that fail or leave staging data behind;
+- purge attempted while a preservation/legal hold is active;
 - vendor-return files copied directly into production without ingress review;
-- executable/configuration files placed into auto-run or live configuration directories.
+- executable/configuration files placed into auto-run or live configuration directories;
+- human upload operators attempting to select unapproved files or destinations.
 
 ---
 
-## 18. Retention and purge
+## 18. Retention, preservation, and purge
 
-Retention should distinguish **evidence** from **released bytes**.
+Retention should distinguish **evidence**, **preserved originals**, and **temporary releasable bytes**.
 
 - Audit and approval evidence may require long retention for investigation, legal, or compliance reasons.
-- Release-quarantine originals should be retained only as long as necessary for review/investigation and according to data classification.
+- Release-quarantine originals used only for troubleshooting should be retained only as long as necessary for review/investigation and according to data classification.
+- Incident/forensic/legal originals may require immutable preservation under a legal/evidence hold; such holds override normal automated purge until formally released.
+- Redacted/minimised derivatives should retain a lineage reference to the original without exposing the original to ordinary consumers.
 - Final transfer staging copies should expire after the support/test need is complete.
 - Vendor-retention expectations should be captured where contracts or portal capabilities provide them.
+- Human-assisted upload sessions should purge temporary local/session copies after successful upload.
 - Purge failures must be visible and retried; expiry should not be a metadata-only state while bytes remain broadly accessible.
 
 ---
@@ -690,12 +771,15 @@ This architecture is product-neutral. A production implementation typically need
 | Secrets detection | Tokens, passwords, keys, connection strings, credentials |
 | Redaction / sanitisation | Transform content to the minimum releasable form |
 | Managed File Transfer / transfer broker | Bound, auditable transfer across zones and to vendors |
+| Secure browser / controlled upload | Managed human-assisted upload to vendor portals without safe APIs |
+| Cross-domain / disconnected transfer | Approved transfer guard/appliance/media process for isolated networks |
 | Policy engine | Risk-based routing and fail-closed decisions |
 | Evidence database | Canonical state, findings, hashes, approvals, exceptions |
 | SIEM / monitoring | Abuse detection, operational monitoring, investigations |
 | Key management | Encryption at rest/in transit and file-level encryption where required |
+| Retention / legal hold | Preserve evidence when required and purge temporary bytes when permitted |
 
-A build-versus-buy evaluation should treat secure data release / managed cross-domain transfer as a capability domain distinct from package repository and secure file ingress.
+The data-release build-versus-buy/hybrid sourcing choice is tracked in [ADR-0014](adr/0014-controlled-data-release-sourcing-strategy.md). The evidence-store boundary is tracked in [ADR-0015](adr/0015-data-release-evidence-store-boundary.md).
 
 ---
 
@@ -725,6 +809,8 @@ The key difference is the security objective:
 | Recall unsafe software | Cancel/revoke untransferred release; purge staging; investigate disclosure if already transferred |
 | Deployment may be a later separate process | Execution/change is explicitly a later separate process and never implied by transfer |
 
+Vendor-return content crosses back into an inbound control but not always the package lifecycle: packages/binaries use package intake, while ordinary support documents/data require generic secure file/content inspection before use.
+
 ---
 
 ## 21. POC recommendation
@@ -738,25 +824,28 @@ The existing package-intake POC can be extended without building a production MF
 - a redaction step;
 - a mock internal destination and mock vendor portal;
 - a release approval bound to the final hash and destination;
-- explicit proof that a transferred script remains inert and cannot automatically change the destination environment.
+- explicit proof that a transferred script remains inert and cannot automatically change the destination environment;
+- a retention-hold negative test and explicit generic inbound-quarantine return path.
 
 The POC should prove the control model and evidence flow, not claim production-grade DLP accuracy or cross-domain certification.
 
 ---
 
-## 22. Open decisions
+## 22. Architecture decisions and policy inputs
 
-This document introduces several decisions that should be resolved before production implementation:
+The ADR register is the canonical home for architecture and sourcing decisions. The following data-release decisions are currently Proposed:
 
-1. Which data-classification/DLP engine is authoritative for automated release policy?
-2. Which source environments require separate source-owner approval before collection?
-3. Which data types require mandatory security/privacy review regardless of destination?
-4. What destination classes are permitted: OA, test/lab, partner, vendor portal, managed SFTP, removable media?
-5. Which Managed File Transfer/cross-domain technology becomes the standard transfer broker?
-6. What retention periods apply to original collected bytes, final release bytes, and evidence?
-7. What constitutes acceptable redaction for structured data, logs, PCAPs, and memory dumps?
-8. Which controls may be bypassed under emergency incident authority, by whom, and for how long?
-9. What additional controls apply if a transfer crosses regulatory, national, contractual, or sovereignty boundaries?
-10. Should the controlled data-release lifecycle share the existing evidence database schema or use a separate bounded schema with shared identity/audit primitives?
+1. [ADR-0013](adr/0013-separate-ingress-and-data-release-control-planes.md) — keep ingress and controlled data release as sibling control planes with shared platform primitives where appropriate.
+2. [ADR-0014](adr/0014-controlled-data-release-sourcing-strategy.md) — choose Build, Buy, or Hybrid for controlled collection, private DLP/content security, redaction, MFT/transfer brokering, and release operations.
+3. [ADR-0015](adr/0015-data-release-evidence-store-boundary.md) — choose the database/schema boundary between package-intake evidence and data-release evidence.
 
-The top-level architectural choice to keep ingress and data release as sibling control planes is tracked in [`ADR-0013`](adr/0013-separate-ingress-and-data-release-control-planes.md).
+Before production implementation, the organisation also needs policy/standards inputs that do not necessarily require individual ADRs:
+
+- which source environments require separate source-owner approval before collection;
+- which data types require mandatory security/privacy review regardless of destination;
+- which destination classes are permitted, including OA, test/lab, partner, vendor portal, managed SFTP, disconnected transfer, and removable media;
+- authoritative data-classification/DLP policy and acceptable redaction/minimisation standards for structured data, logs, PCAPs, and memory dumps;
+- retention periods for troubleshooting originals, preserved incident/forensic originals, final release bytes, vendor copies where governable, and audit/evidence;
+- which controls may be bypassed under emergency incident authority, by whom, and for how long;
+- cross-border, sovereignty, contractual, export-control, and privacy constraints;
+- downstream product selections for DLP/content inspection, MFT/secure exchange, secure browser/upload, and cross-domain transfer after ADR-0014 is resolved.

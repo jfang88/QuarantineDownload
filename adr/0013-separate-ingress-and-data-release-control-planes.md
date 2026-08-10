@@ -4,6 +4,7 @@
 - **Date:** 2026-08-10
 - **Owners:** Security Architecture
 - **Affects:** Repository scope, request workflow, lifecycle state, quarantine/staging, tooling, POC design
+- **Related:** [ADR-0014](0014-controlled-data-release-sourcing-strategy.md), [ADR-0015](0015-data-release-evidence-store-boundary.md)
 
 ## Context
 
@@ -16,7 +17,7 @@ Although both use cases involve files, request/approval, quarantine, inspection,
 - ingress primarily protects integrity and availability by preventing malicious or compromised external bytes from entering trusted environments;
 - operational-data release primarily protects confidentiality and boundary integrity by preventing sensitive internal bytes from leaving an authorised trust zone or being delivered to an unauthorised destination;
 - outbound transfer must additionally prevent the transfer mechanism from becoming a routable or privileged administrative/change channel;
-- external vendor return files still require the existing ingress controls.
+- external vendor return content still requires an appropriate inbound quarantine/inspection path, selected by content type.
 
 The architecture therefore needs an explicit decision on whether to merge both directions into one generic artifact lifecycle or keep them as separate but related control planes.
 
@@ -26,9 +27,9 @@ The architecture therefore needs an explicit decision on whether to merge both d
 - Preserve the strong package-intake lifecycle without overloading its states with unrelated outbound semantics.
 - Make DLP, secrets detection, redaction, destination binding, and data minimisation first-class controls.
 - Prevent cross-domain file transfer from becoming an administrative bridge or automated change channel.
-- Reuse shared enterprise services such as identity, request workflow, evidence, object storage, malware scanning, and SIEM where semantics match.
+- Reuse shared enterprise services such as identity, request workflow, evidence platform, object storage, malware scanning, and SIEM where semantics match.
 - Keep POC implementation practical by sharing infrastructure while maintaining distinct lifecycle/state models.
-- Ensure vendor-return files are explicitly routed back through ingress controls.
+- Ensure vendor-return content is explicitly routed to the appropriate inbound control rather than inheriting trust from an outbound support case.
 
 ## Considered options
 
@@ -52,7 +53,7 @@ Use the existing package lifecycle and add a new artifact class such as `operati
 
 ### Option B — Separate sibling control planes with shared platform primitives
 
-Keep `package-intake-architecture.md` authoritative for ingress and add a separate controlled-data-release architecture and lifecycle. Reuse identity, portal, evidence, object storage, malware scanning, monitoring, and policy infrastructure where appropriate.
+Keep `package-intake-architecture.md` authoritative for ingress and add a separate controlled-data-release architecture and lifecycle. Reuse identity, portal, evidence platform, object storage, malware scanning, monitoring, and policy infrastructure where appropriate, while maintaining bounded lifecycle schemas and RBAC.
 
 **Pros**
 
@@ -60,15 +61,15 @@ Keep `package-intake-architecture.md` authoritative for ingress and add a separa
 - DLP/secrets/redaction/destination controls become first-class;
 - package lifecycle remains coherent;
 - shared infrastructure reduces duplicate engineering;
-- vendor return path can explicitly cross back into ingress;
+- vendor return path can explicitly cross back into the appropriate inbound quarantine/inspection control;
 - easier to demonstrate `transfer != execute/change` as a hard architectural boundary.
 
 **Cons**
 
 - more documentation and lifecycle logic;
-- portal/evidence schemas need a second workflow type;
+- portal/evidence platform needs a second workflow type and bounded schema/service roles;
 - shared services require careful namespace and RBAC separation;
-- some tooling/procurement analysis must now cover an additional capability domain.
+- tooling/procurement analysis must cover an additional capability domain.
 
 ### Option C — Build a completely independent data-release platform
 
@@ -97,9 +98,15 @@ The repository should contain:
 - `controlled-data-release-architecture.md` for operational-data egress/cross-domain release;
 - `controlled-data-release-tooling.md` for implementation/procurement capability mapping;
 - `controlled-data-release-poc.md` for the POC extension and demonstration;
-- shared ADR, identity, evidence, storage, monitoring, and workflow concepts where reuse is safe.
+- shared ADR, identity, evidence-platform, storage, monitoring, and workflow primitives where reuse is safe;
+- separate lifecycle semantics and bounded evidence access for each domain.
 
 This ADR remains `Proposed` until formally accepted in architecture review. The new documents are therefore draft reference material and do not claim the production boundary decision is ratified.
+
+The two immediate downstream decisions are intentionally separated from this structural ADR:
+
+- [ADR-0014](0014-controlled-data-release-sourcing-strategy.md) — Build/Buy/Hybrid sourcing for the data-release capability;
+- [ADR-0015](0015-data-release-evidence-store-boundary.md) — shared tables vs. bounded sibling schemas vs. separate evidence databases.
 
 ## Consequences if accepted
 
@@ -109,23 +116,24 @@ This ADR remains `Proposed` until formally accepted in architecture review. The 
 - outbound data release gains explicit confidentiality and destination controls;
 - source collection, transfer, and privileged change are cleanly separated;
 - the POC can demonstrate both dangerous-data-in and sensitive-data-out scenarios using shared infrastructure;
-- return files from vendors have an unambiguous route back through ingress quarantine;
+- vendor-return content has an unambiguous type-based route into inbound quarantine/inspection;
 - procurement can evaluate Managed File Transfer/cross-domain capability separately from repository/package-security products.
 
 ### Negative / costs
 
 - additional lifecycle/state model must be implemented;
-- request portal and evidence schema must support multiple workflow types;
+- request portal and evidence platform must support multiple workflow types with bounded access;
 - DLP/secrets/redaction and transfer-broker capabilities add new technology dependencies;
-- more controls require ownership decisions, especially data classification, destination policy, retention, and emergency release.
+- more controls require ownership decisions, especially data classification, destination policy, retention, preservation, and emergency release.
 
 ## Follow-up actions
 
 1. Review and accept/reject this ADR.
-2. Define authoritative DLP/data-classification policy and ownership.
-3. Define approved destination classes and vendor onboarding process.
-4. Select a Managed File Transfer/cross-domain transfer implementation pattern.
-5. Define retention/purge requirements for original, transformed, and transferred copies.
-6. Define emergency/break-glass release controls.
-7. Decide whether release lifecycle records share the existing evidence database schema or use a bounded sibling schema.
-8. Add controlled-data-release acceptance tests to the POC when the implementation work begins.
+2. Review [ADR-0014](0014-controlled-data-release-sourcing-strategy.md) for the data-release Build/Buy/Hybrid direction.
+3. Review [ADR-0015](0015-data-release-evidence-store-boundary.md) for the lifecycle/evidence schema boundary.
+4. Define authoritative DLP/data-classification policy and ownership.
+5. Define approved destination classes, vendor onboarding, and secure human-assisted upload requirements.
+6. Define retention/purge and preservation/legal-hold requirements for original, transformed, and transferred copies.
+7. Define emergency/break-glass release controls.
+8. Ensure generic vendor-return documents/data have a secure inbound quarantine/content-inspection path rather than being forced through package promotion or trusted by association.
+9. Implement and test the controlled-data-release POC acceptance criteria before treating the control model as proven.

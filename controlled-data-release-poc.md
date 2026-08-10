@@ -5,13 +5,20 @@
 | Field | Value |
 |---|---|
 | Document title | Controlled Data Release — POC Extension and Demo Runbook |
-| Version | 0.1 |
+| Version | 0.2 |
 | Status | Draft POC extension |
 | Owner | Security Architecture |
 | Last updated | 2026-08-10 |
-| Related documents | [`controlled-data-release-architecture.md`](controlled-data-release-architecture.md), [`poc-deployment-plan.md`](poc-deployment-plan.md), [`poc-build-runbook.md`](poc-build-runbook.md) |
+| Related documents | [`controlled-data-release-architecture.md`](controlled-data-release-architecture.md), [`controlled-data-release-tooling.md`](controlled-data-release-tooling.md), [`poc-deployment-plan.md`](poc-deployment-plan.md), [`poc-build-runbook.md`](poc-build-runbook.md), [ADR-0013](adr/0013-separate-ingress-and-data-release-control-planes.md), [ADR-0014](adr/0014-controlled-data-release-sourcing-strategy.md), [ADR-0015](adr/0015-data-release-evidence-store-boundary.md) |
 
-> This document extends the existing package-intake POC with a second, deliberately small workflow for **outbound/cross-domain operational data release**. It is a demonstration design, not a production DLP, Managed File Transfer, or cross-domain solution.
+### Revision history
+
+| Version | Date | Author | Summary of changes |
+|---|---|---|---|
+| 0.1 | 2026-08-10 | Security Architecture | Initial outbound/cross-domain controlled-data-release POC extension |
+| 0.2 | 2026-08-10 | Security Architecture | Aligned vendor-return routing, source provenance, preservation hold, evidence masking, and POC data model with the reconciled reference architecture |
+
+> This document extends the existing package-intake POC with a second, deliberately small workflow for **outbound/cross-domain operational data release**. It is a demonstration design, not a production DLP, Managed File Transfer, secure-browser, or cross-domain solution. Its component choices do not resolve ADR-0014 or ADR-0015.
 
 ---
 
@@ -22,16 +29,18 @@ The extension should demonstrate that:
 1. a requester must authenticate before requesting an operational-data release;
 2. approval to collect is distinct from approval to release;
 3. the collector can read only a defined mock source scope;
-4. collected bytes are staged in release quarantine and hashed;
-5. secrets/sensitive synthetic patterns are detected before release;
-6. an unsafe original bundle can be rejected or routed to redaction;
-7. redaction creates a new release candidate and new hash;
-8. release approval is bound to the final hash and destination;
-9. the transfer worker can send only to an approved destination profile;
-10. the same approval cannot be reused for a different destination or modified file;
-11. a transferred script remains inert in the destination staging area and cannot automatically execute or change the destination environment;
-12. vendor-return files are routed back into the existing ingress/quarantine process;
-13. audit evidence shows the complete request-to-purge lifecycle.
+4. collection evidence records source scope, collection method/time context, and exact hashes;
+5. collected bytes are staged in release quarantine and hashed;
+6. secrets/sensitive synthetic patterns are detected before release without copying full secret values into audit logs;
+7. an unsafe original bundle can be rejected or routed to redaction;
+8. redaction creates a new release candidate and new hash while preserving lineage to the original;
+9. release approval is bound to the final hash and destination;
+10. the transfer worker can send only to an approved destination profile;
+11. the same approval cannot be reused for a different destination or modified file;
+12. a transferred script remains inert in the destination staging area and cannot automatically execute or change the destination environment;
+13. vendor-return files are routed to the appropriate inbound quarantine path rather than trusted automatically;
+14. a preservation/legal-hold flag can prevent purge of a protected original while allowing a redacted derivative to be released;
+15. audit evidence shows the complete request-to-transfer/purge or preservation lifecycle.
 
 ---
 
@@ -41,34 +50,39 @@ The extension should demonstrate that:
 
 - existing Keycloak/OIDC pattern or equivalent local IdP;
 - existing lightweight request/approval portal pattern;
-- PostgreSQL evidence/workflow records;
+- PostgreSQL evidence/workflow records using a separate data-release table/schema namespace for the demo;
 - a synthetic `mock-production` file source;
 - a controlled collection worker;
 - separate release-quarantine and release-approved buckets/directories;
+- a small inbound-return quarantine for generic vendor-return fixtures;
 - SHA-256 hashing;
+- source/collection metadata capture;
 - file-type detection;
 - ClamAV/YARA where already available in the package POC;
 - simple synthetic secrets/DLP detection;
 - deterministic redaction;
+- masked finding evidence rather than full secret values;
 - destination profiles rather than arbitrary URLs;
 - a mock OA/internal destination;
 - a mock vendor portal;
 - transfer receipt evidence;
 - staging expiry/purge;
+- preservation-hold flag that blocks purge of selected originals;
 - a negative test proving that transferred change-capable content is inert.
 
 ### Deliberately out of scope
 
 - production-grade DLP classification accuracy;
 - real customer or production data;
-- real vendor support portals;
-- real cross-domain guards;
+- real vendor support portals or secure-browser products;
+- real cross-domain guards or removable-media operations;
 - production Managed File Transfer HA/DR;
 - real privileged production collection;
 - legal/privacy workflow integrations;
 - full content-disarm-and-reconstruction;
 - production memory-dump or PCAP parsing;
-- real malware or credentials.
+- real malware or credentials;
+- production forensic tooling or legal-hold system integration.
 
 All test fixtures must be synthetic.
 
@@ -84,12 +98,13 @@ flowchart LR
     subgraph Control[Control network]
         KC
         Portal
-        DB[(PostgreSQL)]
+        DB[(PostgreSQL\nbounded data-release tables/schema)]
         Queue[Job queue]
         Inspect[Inspection worker\nfile type + ClamAV/YARA\nsynthetic secrets/DLP]
         Redact[Redaction worker]
         RQ[Release quarantine]
         RA[Approved release store]
+        IQ[Inbound-return quarantine]
     end
 
     subgraph Source[Mock protected source]
@@ -117,6 +132,8 @@ flowchart LR
     RA --> Broker
     Broker --> OA
     Broker --> Vendor
+    Vendor -. returned fixture .-> IQ
+    IQ --> Inspect
     Collector --> DB
     Inspect --> DB
     Redact --> DB
@@ -133,7 +150,8 @@ The demonstration should visibly enforce these properties:
 - the collector and broker use separate service identities;
 - only the collector can access the mock source;
 - only the broker can access destination profiles;
-- normal users cannot read release-quarantine storage directly.
+- inspection/redaction services do not have unrestricted internet egress;
+- normal users cannot read release-quarantine or inbound-return quarantine storage directly.
 
 ---
 
@@ -150,9 +168,10 @@ Reuse the existing POC identity pattern where possible.
 | `admin1` | Platform admin | Operate/reset POC; not a normal business release approver |
 | `auditor1` | Auditor | Read workflow/evidence only |
 | `svc-collector` | Collection service | Read approved mock source scope; write release quarantine |
-| `svc-inspector` | Inspection service | Read quarantine; write findings only |
+| `svc-inspector` | Inspection service | Read assigned quarantine objects; write masked findings only |
 | `svc-redactor` | Redaction service | Read flagged candidate; write new candidate |
 | `svc-transfer` | Transfer service | Read only approved release candidate; write approved destination profile |
+| `svc-purge` | Purge service | Delete only eligible staging objects; must respect preservation hold |
 
 The POC should reject self-approval where the same human identity attempts to create and approve the final release.
 
@@ -198,6 +217,18 @@ client_secret=FAKE-DEMO-SECRET-987654
 
 Expected result: `REDACTION_REQUIRED`.
 
+### `incident-evidence.log`
+
+Contains harmless synthetic incident-timeline entries with no real sensitive data.
+
+```text
+2026-08-10T08:10:00Z ALERT synthetic-authentication-anomaly
+2026-08-10T08:10:10Z INFO synthetic-session-id=SESSION-DEMO-001
+2026-08-10T08:11:00Z INFO analyst-note=DEMO-ONLY
+```
+
+Expected result: inspection may pass, but the request is marked `preservation_hold=true`; purge of the original is denied until a separate hold-release action is recorded. A copied/redacted derivative may still be released.
+
 ### `disable-firewall.ps1`
 
 Use a harmless text fixture rather than an effective administrative command. For example:
@@ -210,9 +241,11 @@ Expected result: it may be transferred only to a test destination under an expli
 
 ### `vendor-return-demo.txt`
 
-A harmless file served by the mock vendor portal as a response attachment.
+A harmless ordinary data file served by the mock vendor portal as a response attachment.
 
-Expected result: direct copying into the approved destination is blocked by process; it is instead submitted to the existing ingress/quarantine workflow.
+Expected result: direct copying into an approved internal repository/location is blocked. Because this is ordinary data rather than a package, it is written to the generic inbound-return quarantine and content-inspected before any later release/use.
+
+A separate harmless `vendor-return-utility.bin` fixture may be used to demonstrate the other branch: software/binary return content creates a new package/software intake request.
 
 ---
 
@@ -238,7 +271,7 @@ Each finding should record:
 - scanner version;
 - disposition (`redact`, `remove file`, `approved exception`, `block`).
 
-Do not store the full secret value in normal audit logs. A short masked preview or finding fingerprint is enough for the demo.
+Do not store the full secret value in normal audit logs. A short masked preview or finding fingerprint is enough for the demo. The inspection worker should have no general internet access, proving that a security scanner cannot simply exfiltrate the file it is inspecting.
 
 ---
 
@@ -262,18 +295,21 @@ DRAFT
   -> PURGED
 ```
 
+`preservation_hold` is an orthogonal flag, not a lifecycle state. When set on an original object, the purge worker must refuse to delete it until an authorised hold-release event exists. A derived/redacted release candidate has its own object identity and can continue through the release lifecycle.
+
 ### Minimum evidence
 
 | State/transition | Evidence |
 |---|---|
-| Request | requester, purpose, source fixture/path, destination profile, case/reference |
+| Request | requester, purpose, source fixture/path, destination profile, case/reference, preservation-hold flag if applicable |
 | Approval to collect | source/release policy decision and distinct actor where configured |
-| Collection | collector identity, source path, file list, size, SHA-256 |
-| Inspection | file type, malware result, synthetic secrets/DLP findings, policy/scanner versions |
-| Redaction | transformation ID, affected files, new SHA-256 |
+| Collection | collector identity, source system/fixture, collection method, requested/actual time window, file list, size, SHA-256 |
+| Inspection | file type, malware result, synthetic secrets/DLP findings, policy/scanner versions; sensitive finding values masked |
+| Redaction | transformation ID, parent/original object ID, affected files, new SHA-256 |
 | Release approval | final hash, destination profile, approver, expiry |
-| Transfer | service identity, destination profile, bytes, timestamp, transaction/receipt ID |
-| Purge | object IDs removed, purge worker identity, completion timestamp |
+| Transfer | service identity, destination profile, bytes, timestamp, verified final hash, transaction/receipt ID |
+| Preservation hold | object ID, actor, reason/case, timestamp, hold status/release event |
+| Purge | object IDs removed, purge worker identity, completion timestamp, check showing no active hold applies |
 
 ---
 
@@ -289,6 +325,8 @@ The POC should expose a small fixed set of destination profiles rather than acce
 
 A request for `vendor-a-support` should not be editable after final approval to point at a different host. Changing the destination should invalidate the approval and require a new release decision.
 
+The production architecture also permits a controlled human-assisted vendor upload and disconnected/cross-domain transfer where needed, but those are deliberately not implemented as real browser or removable-media workflows in this POC.
+
 ---
 
 ## 9. Demo scenarios
@@ -300,7 +338,7 @@ A request for `vendor-a-support` should not be editable after final approval to 
 3. Choose destination `oa-support` and provide a synthetic troubleshooting ticket.
 4. Approve collection with a distinct approver/source owner.
 5. Run collection.
-6. Show SHA-256 and quarantine object ID.
+6. Show source fixture/path, collection method/time window, SHA-256, and quarantine object ID.
 7. Run inspection; show all mandatory controls `PASS`.
 8. Approve the final hash for `oa-support`.
 9. Run transfer.
@@ -314,15 +352,15 @@ A request for `vendor-a-support` should not be editable after final approval to 
 1. Request `app-sensitive.log` for `vendor-a-support`.
 2. Approve collection.
 3. Inspect the file.
-4. Show fake API key/password/customer identifier findings.
+4. Show fake API key/password/customer identifier findings using masked values/fingerprints.
 5. Confirm that release cannot be approved while the flagged original is the current candidate.
 6. Run redaction to remove/mask the synthetic sensitive values.
-7. Show that the redacted output has a new hash.
+7. Show that the redacted output has a new hash and parent/original object reference.
 8. Re-run inspection and show `PASS` or an approved residual finding.
 9. Approve the **new** hash for `vendor-a-support` and support case `CASE-DEMO-001`.
 10. Transfer and show receipt.
 
-**Expected result:** approval applies only to the post-redaction bytes.
+**Expected result:** approval applies only to the post-redaction bytes; audit findings do not leak the original synthetic secret values.
 
 ### Scenario C — Destination substitution is blocked
 
@@ -359,14 +397,15 @@ A request for `vendor-a-support` should not be editable after final approval to 
 
 **Expected result:** release is blocked; uninspectable does not mean clean.
 
-### Scenario G — Vendor return follows ingress controls
+### Scenario G — Vendor return follows the correct inbound path
 
 1. Complete an outbound vendor-support release.
-2. Mock vendor portal presents `vendor-return-demo.txt` or a harmless mock utility as a response attachment.
+2. Mock vendor portal presents `vendor-return-demo.txt` as an ordinary response attachment.
 3. Attempt to use the outbound transaction to place the returned file directly in an approved internal repository/location.
-4. Workflow rejects direct trust and creates/submits a new inbound intake request.
+4. Workflow rejects direct trust and writes the file to **generic inbound-return quarantine** for content inspection.
+5. Optionally repeat with `vendor-return-utility.bin`; that fixture creates a new package/software intake request instead.
 
-**Expected result:** outbound approval never authorises inbound content.
+**Expected result:** outbound approval never authorises inbound content, and ordinary data is not incorrectly forced through package promotion semantics.
 
 ### Scenario H — Self-approval is blocked
 
@@ -374,6 +413,18 @@ A request for `vendor-a-support` should not be editable after final approval to 
 2. Attempt final release approval using the same identity.
 
 **Expected result:** policy denies the action and records the denied attempt.
+
+### Scenario I — Preservation hold blocks purge
+
+1. Request `incident-evidence.log` and mark the request/original as `preservation_hold=true` with a synthetic incident reference.
+2. Complete collection and show source/time/hash evidence.
+3. Create a releasable derivative and, if desired, transfer that derivative to `oa-support`.
+4. Attempt to purge the original object.
+5. Purge worker refuses and records the active hold.
+6. Record a separate authorised hold-release event.
+7. Re-run purge and show it now succeeds according to retention policy.
+
+**Expected result:** release and preservation are independent; data minimisation does not destroy evidence required to be retained.
 
 ---
 
@@ -396,7 +447,7 @@ Run Scenario A and show:
 
 - request;
 - distinct approval;
-- controlled collection;
+- controlled collection and source/time evidence;
 - inspection;
 - final hash;
 - destination binding;
@@ -409,7 +460,8 @@ Run Scenario B and emphasise:
 
 - original file is not releasable;
 - secrets/DLP findings drive redaction;
-- transformation creates a new hash;
+- findings are masked in audit;
+- transformation creates a new hash and preserves lineage;
 - only the new bytes are approved;
 - transfer is tied to the vendor case/profile.
 
@@ -424,7 +476,11 @@ Run Scenario E and show:
 
 ### Part 5 — Return-path control
 
-Run Scenario G to show that a vendor response is treated as new inbound content.
+Run Scenario G to show that vendor responses are treated as new inbound content and routed according to type.
+
+### Optional Part 6 — Evidence preservation
+
+Run Scenario I to show that an incident/legal hold prevents purge of the original independently of the releasable derivative.
 
 ---
 
@@ -437,19 +493,21 @@ The POC is successful when all of the following are demonstrated:
 | AC-DR-01 | User authentication and role mapping are enforced. |
 | AC-DR-02 | A requester cannot self-approve a protected final release. |
 | AC-DR-03 | Collection can access only the configured mock source scope. |
-| AC-DR-04 | Collected bytes are hashed before inspection. |
+| AC-DR-04 | Collection records source/method/time context and hashes bytes before inspection. |
 | AC-DR-05 | Release-quarantine content is unavailable to ordinary consumers. |
 | AC-DR-06 | Synthetic secrets/DLP findings block or route release to redaction. |
-| AC-DR-07 | Redaction creates a new file identity/hash. |
-| AC-DR-08 | Final approval records the exact hash and destination profile. |
-| AC-DR-09 | Changing the file or destination invalidates/blocks transfer. |
-| AC-DR-10 | The transfer broker cannot route traffic between source and destination networks. |
-| AC-DR-11 | The transfer service does not have source-system administrative rights. |
-| AC-DR-12 | Change-capable content remains inert after transfer. |
-| AC-DR-13 | Mandatory `INCONCLUSIVE` inspection blocks external release by default. |
-| AC-DR-14 | Transfer outcome and receipt are auditable. |
-| AC-DR-15 | Staging bytes can be purged without deleting required audit evidence. |
-| AC-DR-16 | Vendor-return files are sent through inbound quarantine rather than trusted automatically. |
+| AC-DR-07 | Audit findings mask synthetic secret values rather than copying them in full. |
+| AC-DR-08 | Redaction creates a new file identity/hash and preserves parent/original lineage. |
+| AC-DR-09 | Final approval records the exact hash and destination profile. |
+| AC-DR-10 | Changing the file or destination invalidates/blocks transfer. |
+| AC-DR-11 | The transfer broker cannot route traffic between source and destination networks. |
+| AC-DR-12 | The transfer and inspection services do not have source-system administrative rights or unrestricted internet egress. |
+| AC-DR-13 | Change-capable content remains inert after transfer. |
+| AC-DR-14 | Mandatory `INCONCLUSIVE` inspection blocks external release by default. |
+| AC-DR-15 | Transfer outcome and receipt are auditable. |
+| AC-DR-16 | Eligible staging bytes can be purged without deleting required audit evidence. |
+| AC-DR-17 | Vendor-return ordinary files enter generic inbound quarantine; software/binary returns create an appropriate package/software intake path. |
+| AC-DR-18 | An active preservation hold blocks purge of a protected original until an authorised hold-release action exists. |
 
 ---
 
@@ -458,18 +516,21 @@ The POC is successful when all of the following are demonstrated:
 ### Increment 1 — Workflow and evidence
 
 - add release request type to the POC portal;
-- add release lifecycle tables/state transitions;
+- add release lifecycle tables/state transitions in a bounded data-release namespace;
+- add source/collection metadata and preservation-hold fields/events;
 - create destination-profile table;
 - create audit events;
-- create mock source and quarantine buckets.
+- create mock source, release quarantine, approved release, and inbound-return quarantine buckets/paths.
 
 ### Increment 2 — Inspection and redaction
 
 - add file-type check;
 - reuse ClamAV/YARA where available;
 - add deterministic secrets/DLP patterns;
+- mask findings before writing routine evidence;
 - add redaction worker;
-- ensure redaction produces a new hash/evidence record.
+- ensure redaction produces a new hash and parent/original evidence record;
+- deny general internet egress from inspection/redaction workers.
 
 ### Increment 3 — Transfer broker
 
@@ -485,8 +546,10 @@ The POC is successful when all of the following are demonstrated:
 - self-approval;
 - unsupported archive;
 - transfer-worker privilege check;
+- inspection-worker egress check;
 - inert script fixture;
-- vendor-return ingress routing;
+- vendor-return type routing;
+- preservation-hold purge denial/release;
 - purge failure/retry.
 
 ---
@@ -503,6 +566,8 @@ A small POC can model the release workflow with tables or equivalent objects suc
 - `source_environment`
 - `source_system`
 - `source_scope`
+- `collection_method`
+- `requested_time_window`
 - `destination_profile_id`
 - `external_case_reference`
 - `risk_tier`
@@ -520,7 +585,22 @@ A small POC can model the release workflow with tables or equivalent objects suc
 - `size_bytes`
 - `file_type`
 - `candidate_type` (`original`, `redacted`, `final`)
+- `preservation_hold`
+- `hold_reference`
 - `created_at`
+
+### `release_collection_event`
+
+- `id`
+- `request_id`
+- `release_object_id`
+- `collector_identity`
+- `source_system`
+- `collection_method`
+- `actual_source_scope`
+- `source_time_context`
+- `started_at`
+- `completed_at`
 
 ### `release_finding`
 
@@ -554,10 +634,22 @@ A small POC can model the release workflow with tables or equivalent objects suc
 - `destination_profile_id`
 - `service_identity`
 - `bytes_sent`
+- `verified_sha256`
 - `remote_receipt`
 - `started_at`
 - `completed_at`
 - `outcome`
+
+### `preservation_event`
+
+- `id`
+- `release_object_id`
+- `actor_subject`
+- `action` (`hold`, `release_hold`)
+- `reason_reference`
+- `created_at`
+
+The production schema boundary remains subject to ADR-0015; the POC should demonstrate bounded data-release tables rather than treating package lifecycle tables as reusable by default.
 
 ---
 
@@ -577,9 +669,10 @@ Do not manually set the request to `READY_FOR_RELEASE` without a recorded dispos
 
 ### Redacted file still produces findings
 
-- show the remaining findings;
+- show the remaining masked findings;
 - fix the synthetic transformation rule;
 - create another transformed candidate with a new hash;
+- preserve the parent/original link;
 - re-run inspection;
 - never edit the approved candidate in place.
 
@@ -597,10 +690,12 @@ A retry should reuse the same approved object/destination and idempotency key ra
 
 ### Purge fails
 
-- record the failure;
-- keep the request in `PURGE_PENDING`;
+- check whether the object has an active preservation hold;
+- if a hold exists, do not bypass it — record that purge is intentionally blocked;
+- otherwise record the failure;
+- keep the request/object in purge-pending handling;
 - retry with an idempotent purge job;
-- alert if the object remains after the retention deadline.
+- alert if an eligible object remains after the retention deadline.
 
 ---
 
@@ -609,11 +704,12 @@ A retry should reuse the same approved object/destination and idempotency key ra
 A demo reset should:
 
 1. delete mock destination files;
-2. purge release-quarantine and approved-release fixtures;
-3. reset release workflow/evidence records only for the demo namespace;
-4. recreate deterministic fixture hashes if fixtures are regenerated;
-5. preserve the package-intake POC data unless a full environment reset is explicitly requested;
-6. verify mock source files are restored to known-safe synthetic contents.
+2. purge release-quarantine, approved-release, and inbound-return fixtures that are not needed for the next scenario;
+3. clear/reset synthetic preservation holds before deleting held demo fixtures;
+4. reset release workflow/evidence records only for the demo namespace;
+5. recreate deterministic fixture hashes if fixtures are regenerated;
+6. preserve the package-intake POC data unless a full environment reset is explicitly requested;
+7. verify mock source files are restored to known-safe synthetic contents.
 
 ---
 
@@ -621,16 +717,19 @@ A demo reset should:
 
 The POC is intentionally not a product-selection exercise. A production design should separately evaluate:
 
-- enterprise DLP/content-classification integration;
+- enterprise DLP/content-classification integration and private-processing boundaries;
 - secrets detection suitable for logs and diagnostic bundles;
 - Managed File Transfer/cross-domain transfer technology;
+- secure human-assisted browser upload for vendor portals without safe APIs;
+- disconnected/cross-domain transfer and removable-media controls where required;
 - source-side collection mechanisms for Windows/Linux/network/database platforms;
 - redaction and structured-data minimisation capabilities;
-- vendor support portal integrations;
+- generic secure-file ingress/content inspection for ordinary vendor-return data;
 - legal/privacy/export-control routing;
+- forensic/incident preservation and legal-hold integration;
 - data residency and sovereignty;
 - operational HA/DR and retention;
 - SIEM and incident-response integration;
-- privileged access boundaries between collection, transfer, and administration.
+- privileged access boundaries between collection, inspection, transfer, and administration.
 
-The reference requirements in [`controlled-data-release-architecture.md`](controlled-data-release-architecture.md) should remain the evaluation baseline even if individual products or implementation patterns change.
+The reference requirements in [`controlled-data-release-architecture.md`](controlled-data-release-architecture.md) should remain the evaluation baseline even if individual products or implementation patterns change. Sourcing and evidence-store decisions remain Proposed under ADR-0014 and ADR-0015.
